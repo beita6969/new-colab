@@ -1,0 +1,365 @@
+================================================================================
+VISUAL FIELD STRUCTURE GUIDE
+================================================================================
+
+This guide shows the actual structure of each dataset's fields.
+
+================================================================================
+1. MATH DATASET - SIMPLE FLAT STRUCTURE
+================================================================================
+
+Sample Record Structure:
+┌─────────────────────────────────────────────────────────────┐
+│ MATH Dataset Sample                                         │
+├─────────────────────────────────────────────────────────────┤
+│ problem      (string)  →  "Solve: 2x + 3 = 7"             │
+│ solution     (string)  →  "2x = 4, x = 2"                 │
+│ level        (string)  →  "Level 5" (highest difficulty)  │
+│ type         (string)  →  "algebra"                        │
+│ split        (string)  →  "train" or "test"               │
+└─────────────────────────────────────────────────────────────┘
+
+Access Code:
+    sample = dataset["train"][0]
+    problem = sample["problem"]    # Direct access - string
+    solution = sample["solution"]  # Direct access - string
+
+
+================================================================================
+2. HOTPOTQA DATASET - NESTED STRUCTURE WITH ARRAYS
+================================================================================
+
+Sample Record Structure:
+┌──────────────────────────────────────────────────────────────┐
+│ HotpotQA Dataset Sample                                      │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│ question     (string)  →  "What is the capital of France?"  │
+│ answer       (string)  →  "Paris"                           │
+│ type         (string)  →  "bridge" or "comparison"          │
+│ level        (string)  →  "easy", "medium", or "hard"       │
+│                                                               │
+│ supporting_facts  (NESTED DICT):                            │
+│ ┌────────────────────────────────────────────────┐         │
+│ │ "title": ["France", "Capital cities"]          │  Arrays  │
+│ │ "sent_id": [0, 2]                             │          │
+│ └────────────────────────────────────────────────┘         │
+│                                                               │
+│ context  (NESTED DICT):                                      │
+│ ┌────────────────────────────────────────────────┐         │
+│ │ "title": ["France", "Europe", ...]             │  Arrays  │
+│ │ "sentences": [                                 │  2D      │
+│ │    ["France is a country.", "It..."],         │  Array   │
+│ │    ["Europe is a continent.", ...]            │          │
+│ │ ]                                             │          │
+│ └────────────────────────────────────────────────┘         │
+│                                                               │
+│ id           (string)  →  "a1b2c3d4..."                     │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+
+Access Code:
+    sample = dataset["train"][0]
+
+    # Top-level fields - DIRECT access
+    question = sample["question"]        # string
+    answer = sample["answer"]            # string
+
+    # Nested dict fields - UNPACK keys
+    supporting = sample["supporting_facts"]
+    fact_titles = supporting["title"]    # List of strings
+    fact_ids = supporting["sent_id"]     # List of integers
+
+    # Nested dict with 2D array - UNPACK and ITERATE
+    context = sample["context"]
+    titles = context["title"]                    # List of strings
+    sentences = context["sentences"]             # List[List[str]]
+
+    # Flatten 2D sentences array:
+    context_text = " ".join([
+        " ".join(sent_list)
+        for sent_list in sentences
+    ])
+
+
+================================================================================
+3. DROP DATASET - SIMPLE WITH ONE NESTED DICT
+================================================================================
+
+Sample Record Structure:
+┌──────────────────────────────────────────────────────────────┐
+│ DROP Dataset Sample                                          │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│ question     (string)  →  "How many touchdowns did..."      │
+│ passage      (string)  →  "In the game yesterday,..."       │
+│ section_id   (string)  →  "nfl_000"                        │
+│ query_id     (string)  →  "q_001"                          │
+│                                                               │
+│ answers_spans  (NESTED DICT):                               │
+│ ┌────────────────────────────────────────────────┐         │
+│ │ "spans": ["3", "three", "3 touchdowns"]       │  Array   │
+│ │ "types": ["number", "span", "span"]          │  Array   │
+│ └────────────────────────────────────────────────┘         │
+│                                                               │
+│ Note: Lists may have multiple entries. Extract first or all.│
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+
+Access Code:
+    sample = dataset["train"][0]
+
+    # Top-level fields - DIRECT access
+    question = sample["question"]        # string
+    passage = sample["passage"]          # string
+
+    # Nested dict with arrays - UNPACK keys and INDEX
+    answers_spans = sample["answers_spans"]
+
+    # Get FIRST answer
+    first_answer = answers_spans["spans"][0]      # string
+    first_type = answers_spans["types"][0]        # string
+
+    # Get ALL answers (may be multiple valid answers)
+    all_answers = answers_spans["spans"]          # List[string]
+    all_types = answers_spans["types"]            # List[string]
+
+    # Iterate over all answers
+    for answer_text, answer_type in zip(all_answers, all_types):
+        print(f"{answer_text} ({answer_type})")
+
+
+================================================================================
+4. MBPP DATASET - SIMPLE FLAT STRUCTURE (WITH LISTS)
+================================================================================
+
+Sample Record Structure:
+┌──────────────────────────────────────────────────────────────┐
+│ MBPP Dataset Sample (sanitized split)                       │
+├──────────────────────────────────────────────────────────────┤
+│ task_id      (int)     →  1                                 │
+│ prompt       (string)  →  "Write a function that..."       │
+│     ↑                                                       │
+│     └─ IMPORTANT: Use "prompt" NOT "text"                 │
+│                                                               │
+│ code         (string)  →  "def solution(x):\n    return x" │
+│                                                               │
+│ test_list    (array)   →  [                                │
+│                  "assert solution(5) == 10",              │
+│                  "assert solution(0) == 0"                │
+│              ]                                              │
+│                                                               │
+│ test_imports (string)  →  "import math"                    │
+│                                                               │
+│ source_file  (string)  →  "Codewars" or "LeetCode"         │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+
+Access Code:
+    # IMPORTANT: Use "sanitized" config
+    dataset = load_dataset("mbpp", "sanitized")
+    sample = dataset["train"][0]
+
+    # All fields - DIRECT access
+    task_id = sample["task_id"]             # int
+    problem = sample["prompt"]              # string (NOT "text"!)
+    solution = sample["code"]               # string
+
+    # Test cases - DIRECT access as list
+    test_cases = sample["test_list"]        # List[string]
+
+    # Iterate over tests
+    for test in test_cases:
+        print(test)
+
+    # Other fields
+    imports = sample["test_imports"]        # string
+    source = sample["source_file"]          # string
+
+
+================================================================================
+NESTED STRUCTURE PATTERNS - QUICK REFERENCE
+================================================================================
+
+Pattern 1: Simple String Field (All datasets have these)
+    field = sample["field_name"]            # Directly access as string
+
+Pattern 2: Nested Dict with Simple Fields (HotpotQA, DROP)
+    nested = sample["nested_field"]         # This is a dict
+    value = nested["key"]                   # Access the key
+
+Pattern 3: Nested Dict with Array Fields (HotpotQA, DROP)
+    nested = sample["nested_field"]         # This is a dict
+    array = nested["array_key"]             # This is a list
+    first = array[0]                        # Access first element
+    all = array                             # Access all elements
+
+Pattern 4: 2D Array in Nested Dict (HotpotQA context)
+    nested = sample["nested_field"]         # This is a dict
+    array_2d = nested["array_2d_key"]       # This is List[List]
+
+    # Flatten 2D array:
+    flat = " ".join([" ".join(row) for row in array_2d])
+
+    # Or iterate:
+    for row in array_2d:
+        for item in row:
+            print(item)
+
+Pattern 5: Multiple Values (DROP answers)
+    nested = sample["nested_field"]         # This is a dict
+    values1 = nested["key1"]                # List with values
+    values2 = nested["key2"]                # List with corresponding values
+
+    # Pair them up:
+    for v1, v2 in zip(values1, values2):
+        print(f"{v1} -> {v2}")
+
+
+================================================================================
+ERROR PATTERNS AND HOW TO FIX THEM
+================================================================================
+
+Error Pattern 1: "string indices must be integers"
+┌─────────────────────────────────────────────────────────────┐
+│ WRONG: Treating dict as string                              │
+│   context = sample["context"]                               │
+│   text = context.upper()  ← ERROR: dict has no .upper()     │
+│                                                               │
+│ RIGHT: Access the dict's keys                               │
+│   context = sample["context"]                               │
+│   text = context["sentences"]  ← Access the list inside     │
+└─────────────────────────────────────────────────────────────┘
+
+Error Pattern 2: "string indices must be integers" (Alternative)
+┌─────────────────────────────────────────────────────────────┐
+│ WRONG: Treating list as dict                                │
+│   sentences = context["sentences"]      # This is a list     │
+│   text = sentences["key"]  ← ERROR: can't index list by key │
+│                                                               │
+│ RIGHT: Index the list by number                             │
+│   sentences = context["sentences"]                          │
+│   first = sentences[0]  ← Use integer index                │
+│   all = sentences      ← Or access the whole list           │
+└─────────────────────────────────────────────────────────────┘
+
+Error Pattern 3: KeyError (wrong field name)
+┌─────────────────────────────────────────────────────────────┐
+│ WRONG: Using "text" for MBPP sanitized split               │
+│   problem = sample["text"]     ← ERROR: field doesn't exist │
+│                                                               │
+│ RIGHT: Use "prompt" for sanitized split                     │
+│   problem = sample["prompt"]   ← Correct field name         │
+│                                                               │
+│ NOTE: "full" split uses "text", "sanitized" uses "prompt"  │
+└─────────────────────────────────────────────────────────────┘
+
+Error Pattern 4: Wrong dataset name
+┌─────────────────────────────────────────────────────────────┐
+│ WRONG: Missing organization name                            │
+│   dataset = load_dataset("hendrycks_math")                  │
+│   ← ERROR: Dataset doesn't exist                            │
+│                                                               │
+│ RIGHT: Include organization name                            │
+│   dataset = load_dataset("EleutherAI/hendrycks_math")       │
+│   ← Correct full identifier                                 │
+└─────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+DEBUGGING WORKFLOW
+================================================================================
+
+If you get ANY error accessing a field:
+
+Step 1: Check field type
+    print(type(sample["field_name"]))
+
+    Output examples:
+    - <class 'str'>          → Direct string access OK
+    - <class 'dict'>         → Need to access sub-keys
+    - <class 'list'>         → Need to index with integers
+    - <class 'int'>          → Direct access OK
+
+Step 2: If it's a dict, check available keys
+    field = sample["field_name"]
+    if isinstance(field, dict):
+        print(field.keys())
+
+    Then access with: field["key_name"]
+
+Step 3: If it's a list, check length and first element
+    field = sample["field_name"]
+    if isinstance(field, list):
+        print(f"Length: {len(field)}")
+        print(f"First element: {field[0]}")
+        print(f"Type of first: {type(field[0])}")
+
+Step 4: For nested structures, check recursively
+    # If first element is also a dict or list:
+    if isinstance(field[0], dict):
+        print(field[0].keys())
+    elif isinstance(field[0], list):
+        print(f"2D array, shape: {len(field)}x{len(field[0])}")
+
+
+================================================================================
+QUICK REFERENCE TABLE
+================================================================================
+
+Dataset    │ Field              │ Type           │ Direct  │ How to Access
+───────────┼────────────────────┼────────────────┼─────────┼───────────────────
+MATH       │ problem            │ string         │ YES     │ sample["problem"]
+           │ solution           │ string         │ YES     │ sample["solution"]
+           │ level              │ string         │ YES     │ sample["level"]
+───────────┼────────────────────┼────────────────┼─────────┼───────────────────
+HotpotQA   │ question           │ string         │ YES     │ sample["question"]
+           │ answer             │ string         │ YES     │ sample["answer"]
+           │ context            │ dict           │ NO      │ sample["context"]["sentences"]
+           │ supporting_facts   │ dict           │ NO      │ sample["supporting_facts"]["title"]
+───────────┼────────────────────┼────────────────┼─────────┼───────────────────
+DROP       │ question           │ string         │ YES     │ sample["question"]
+           │ passage            │ string         │ YES     │ sample["passage"]
+           │ answers_spans      │ dict           │ NO      │ sample["answers_spans"]["spans"][0]
+───────────┼────────────────────┼────────────────┼─────────┼───────────────────
+MBPP       │ task_id            │ int            │ YES     │ sample["task_id"]
+           │ prompt             │ string         │ YES     │ sample["prompt"]
+           │ code               │ string         │ YES     │ sample["code"]
+           │ test_list          │ list           │ YES     │ sample["test_list"]
+───────────┴────────────────────┴────────────────┴─────────┴───────────────────
+
+
+================================================================================
+COMMON TASKS AND SOLUTIONS
+================================================================================
+
+Task 1: Extract all answers from DROP
+    answers_spans = sample["answers_spans"]
+    all_answers = answers_spans["spans"]  # All possible answers
+
+Task 2: Flatten HotpotQA context
+    context = sample["context"]
+    flat = " ".join([" ".join(s) for s in context["sentences"]])
+
+Task 3: Get supporting document titles for HotpotQA
+    supporting = sample["supporting_facts"]
+    titles = supporting["title"]  # List of supporting doc titles
+
+Task 4: Extract test cases from MBPP
+    tests = sample["test_list"]  # Already a list
+    for test in tests:
+        print(test)
+
+Task 5: Create a flat record for JSONL
+    # For each dataset, extract all needed fields:
+    record = {
+        "question": sample.get("question", ""),
+        "answer": sample.get("answer", ""),
+        # ... other fields
+    }
+    # For nested dicts, extract the values:
+    if "nested" in sample and isinstance(sample["nested"], dict):
+        record["nested_key"] = sample["nested"].get("key", "")
+
+
+================================================================================

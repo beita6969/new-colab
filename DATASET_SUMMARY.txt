@@ -1,0 +1,263 @@
+================================================================================
+DATASET DOWNLOAD AND FIELD ACCESS - SUMMARY TABLE
+================================================================================
+
+1. MATH DATASET
+================================================================================
+Original Error:     "Dataset 'lighteval/MATH' doesn't exist on the Hub"
+Correct Name:       EleutherAI/hendrycks_math
+Load Command:       load_dataset("EleutherAI/hendrycks_math")
+
+Field Mapping:
+  problem     →  question        (string) The mathematical problem statement
+  level       →  difficulty      (string) Difficulty level (e.g., "Level 5")
+  type        →  category        (string) Problem category (algebra, geometry, etc.)
+  solution    →  answer          (string) Worked solution with explanation
+  split       →  split           (string) Data partition (train/test)
+
+Dataset Size:       12,500+ samples
+Available Splits:   train, test
+License:            MIT
+
+Quick Access Example:
+  from datasets import load_dataset
+  dataset = load_dataset("EleutherAI/hendrycks_math")
+  sample = dataset["train"][0]
+  print(sample["problem"])      # Mathematical problem
+  print(sample["solution"])     # Solution with steps
+
+================================================================================
+
+2. HOTPOTQA DATASET
+================================================================================
+Original Error:     "string indices must be integers"
+Root Cause:         Nested dict/array structure not handled correctly
+Correct Name:       hotpotqa/hotpot_qa
+Load Command:       load_dataset("hotpotqa/hotpot_qa", "distractor")
+
+Field Mapping (Top-level):
+  id              (string)       Unique identifier
+  question        (string)       The question text
+  answer          (string)       Expected answer
+  type            (string)       "comparison" or "bridge"
+  level           (string)       "easy", "medium", or "hard"
+  supporting_facts (dict)        Supporting document references
+  context         (dict)         Context documents with sentences
+
+Nested Structure - supporting_facts:
+  title           (List[str])    Document titles
+  sent_id         (List[int])    Sentence indices
+
+Nested Structure - context:
+  title           (List[str])    Context document titles
+  sentences       (List[List])   2D array of sentences
+
+Dataset Size:       97.9k (distractor) / 105k (fullwiki)
+Available Configs:  distractor, fullwiki
+Available Splits:   train, validation, (test for fullwiki)
+License:            Creative Commons Attribution 4.0
+
+Quick Access Example:
+  from datasets import load_dataset
+  dataset = load_dataset("hotpotqa/hotpot_qa", "distractor")
+  sample = dataset["train"][0]
+  print(sample["question"])                          # Direct access
+  print(sample["answer"])                            # Direct access
+  supporting = sample["supporting_facts"]
+  print(supporting["title"])                         # Nested dict access
+  context = sample["context"]
+  context_text = " ".join([" ".join(s) for s in context["sentences"]])
+
+================================================================================
+
+3. DROP DATASET
+================================================================================
+Original Error:     "string indices must be integers"
+Root Cause:         answers_spans is a dict with "spans"/"types" arrays
+Correct Name:       ucinlp/drop
+Load Command:       load_dataset("ucinlp/drop")
+
+Field Mapping (Top-level):
+  section_id      (string)       Passage section identifier
+  query_id        (string)       Unique question identifier
+  passage         (string)       The text passage
+  question        (string)       The question requiring reasoning
+  answers_spans   (dict)         Answer information (nested)
+
+Nested Structure - answers_spans:
+  spans           (List[str])    Possible answer texts
+  types           (List[str])    Answer types ("span", "number", etc.)
+
+Dataset Size:       77.4k train, 9.54k validation
+Available Splits:   train, validation
+License:            (Check original paper)
+
+Quick Access Example:
+  from datasets import load_dataset
+  dataset = load_dataset("ucinlp/drop")
+  sample = dataset["train"][0]
+  print(sample["question"])                          # Direct access
+  print(sample["passage"])                           # Direct access
+  answers_spans = sample["answers_spans"]            # Nested dict
+  answer_text = answers_spans["spans"][0]            # Get first answer
+  answer_type = answers_spans["types"][0]            # Get first type
+
+================================================================================
+
+4. MBPP DATASET
+================================================================================
+Original Error:     KeyError: 'text'
+Root Cause:         Sanitized split uses "prompt" not "text"
+Correct Name:       mbpp
+Load Command:       load_dataset("mbpp", "sanitized")
+                    NOTE: Must use "sanitized" split (not "full")
+
+Field Mapping (Sanitized Split):
+  task_id         (int)          Unique problem identifier
+  prompt          (string)       Natural language problem description
+  code            (string)       Sample Python solution
+  test_list       (List[str])    Test cases as assertion strings
+  test_imports    (string)       Required imports for tests
+  source_file     (string)       Original source reference
+
+Field Mapping (Full Split - for reference):
+  task_id         (int)          Unique problem identifier
+  text            (string)       Problem description
+  code            (string)       Solution code
+  test_list       (List[str])    Test cases
+  test_case       (List[str])    Alternative test format
+
+Dataset Size:       974 train samples (sanitized)
+Available Configs:  sanitized, full
+Available Splits:   train, test
+License:            (Check original paper)
+
+Quick Access Example:
+  from datasets import load_dataset
+  dataset = load_dataset("mbpp", "sanitized")     # MUST specify "sanitized"
+  sample = dataset["train"][0]
+  print(sample["task_id"])                         # Integer
+  print(sample["prompt"])                          # Use "prompt" NOT "text"
+  print(sample["code"])                            # Solution code
+  print(sample["test_list"])                       # Test cases
+
+Common Mistake:
+  # WRONG - This causes KeyError: 'text'
+  problem = sample["text"]                         # ✗ Wrong field name
+
+  # RIGHT - Use "prompt" for sanitized split
+  problem = sample["prompt"]                       # ✓ Correct field name
+
+================================================================================
+
+COMPARISON TABLE
+================================================================================
+
+Dataset    | Correct Name           | Config     | Key Issue         | Fix
+-----------|------------------------|------------|-------------------|-----------
+MATH       | EleutherAI/hendrycks   | None       | Wrong namespace   | Use correct
+           | _math                  |            |                   | org name
+-----------|------------------------|------------|-------------------|-----------
+HotpotQA   | hotpotqa/hotpot_qa     | distractor | Nested dicts/     | Unpack
+           |                        | or fullwiki| arrays not        | nested
+           |                        |            | handled           | structures
+-----------|------------------------|------------|-------------------|-----------
+DROP       | ucinlp/drop            | None       | answers_spans     | Access
+           |                        |            | is dict, not      | .spans and
+           |                        |            | direct field      | .types keys
+-----------|------------------------|------------|-------------------|-----------
+MBPP       | mbpp                   | sanitized  | Using "text"      | Use
+           |                        | (required) | instead of        | "prompt"
+           |                        |            | "prompt"          | field
+
+================================================================================
+
+ERROR DIAGNOSIS CHECKLIST
+================================================================================
+
+If you get "string indices must be integers":
+  □ Check if the field you're accessing is a dict (use .keys())
+  □ Check if you need to access a nested field (e.g., dict["key"])
+  □ Verify the field is not a list (use indexing [0] to access first item)
+  □ Print sample[field] to see the actual structure
+
+If you get KeyError for a field:
+  □ Verify you're using the correct split/config
+  □ Check available fields with sample.keys()
+  □ For MBPP: Ensure you're using "sanitized" split (uses "prompt")
+  □ For other datasets: Check documentation for alternative field names
+
+If you get "Dataset doesn't exist":
+  □ Verify the full dataset identifier (include organization/owner)
+  □ Check for typos in dataset name
+  □ Try searching on https://huggingface.co/datasets
+  □ Check if dataset requires a specific config/split
+
+================================================================================
+
+BATCH PROCESSING FOR LARGE DATASETS
+================================================================================
+
+To avoid memory issues with large datasets:
+
+  from datasets import load_dataset
+
+  dataset = load_dataset("dataset_name")
+  train_data = dataset["train"]
+  batch_size = 100
+
+  for i in range(0, len(train_data), batch_size):
+      batch = train_data[i:i+batch_size]
+      for sample in batch:
+          # Process sample
+          pass
+
+================================================================================
+
+OUTPUTTING TO JSONL
+================================================================================
+
+Standard pattern for all datasets:
+
+  import json
+
+  with open("output.jsonl", "w") as f:
+      for sample in dataset:
+          record = {
+              "field1": sample["field1"],
+              "field2": sample["field2"],
+              # ... flatten nested structures as needed
+          }
+          f.write(json.dumps(record) + "\n")
+
+See download_datasets.py for complete working implementation.
+
+================================================================================
+
+FILES PROVIDED
+================================================================================
+
+1. download_datasets.py
+   - Production-ready script to download all 4 datasets
+   - Handles nested structures properly
+   - Outputs JSONL files
+   - Includes error handling and progress bars
+
+2. dataset_examples.py
+   - Minimal example code for each dataset
+   - Shows how to access fields correctly
+   - Includes batch processing example
+   - Dataset structure diagnostic function
+
+3. DATASET_FIXES.md
+   - Detailed markdown documentation
+   - Field mappings and structures
+   - Example code for each dataset
+   - Troubleshooting guide
+
+4. DATASET_SUMMARY.txt (this file)
+   - Quick reference table
+   - Error diagnosis checklist
+   - Comparison of all datasets
+
+================================================================================
