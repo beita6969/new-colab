@@ -113,6 +113,65 @@ class RLWorkflowGenerator:
     def _build_generation_prompt(self, problem: str, problem_type: str) -> str:
         """构建提示词，明确算子 API，让模型自主学习选择"""
 
+        # 代码题专用模板
+        if problem_type == "code":
+            prompt = f"""Generate a Python Workflow class to solve the CODE problem.
+
+CRITICAL for CODE problems:
+- Your __call__ method MUST accept THREE parameters: (problem: str, entry_point: str, test: str)
+- MUST use Programmer to generate code
+- MUST use Test to execute the code with test cases
+- MUST return the execution result, NOT the code string
+
+Available Operators:
+
+1. Programmer(llm) - Auto-generate and execute Python code
+   Call: await self.programmer(problem=str, analysis=str)
+   Returns: {{'code': str, 'output': str}}
+
+2. Test(llm) - Test code with test cases
+   Call: await self.test(problem=str, solution=str, entry_point=str)
+   Returns: {{'result': bool, 'solution': str}}
+
+3. Review(llm) - Review and validate solution
+   Call: await self.review(problem=str, solution=str)
+   Returns: {{'review_result': bool, 'feedback': str}}
+
+Template:
+
+import workspace.{problem_type}.workflows.template.operator as operator
+from scripts.async_llm import create_llm_instance
+from scripts.evaluator import DatasetType
+
+class Workflow:
+    def __init__(self, name: str, llm_config, dataset: DatasetType):
+        self.name = name
+        self.dataset = dataset
+        self.llm = create_llm_instance(llm_config)
+        # Initialize Programmer and Test (required for code problems)
+        self.programmer = operator.Programmer(self.llm)
+        self.test = operator.Test(self.llm)
+
+    async def __call__(self, problem: str, entry_point: str, test: str):
+        # Solve: {problem}
+        # Generate code using Programmer
+        code_result = await self.programmer(problem=problem, analysis='')
+
+        # Test the code (this returns execution result, not code string)
+        test_result = await self.test(
+            problem=problem,
+            solution=code_result['code'],
+            entry_point=entry_point
+        )
+
+        # CRITICAL: Return execution result and cost
+        # test_result['solution'] contains the final code
+        # Return the execution output, not the code
+        return code_result['output'], self.llm.get_usage_summary()["total_cost"]
+"""
+            return prompt
+
+        # 通用模板（数学题和QA题）
         prompt = f"""Generate a Python Workflow class to solve the given problem.
 
 IMPORTANT: Consider the problem's difficulty and complexity when designing your workflow.
@@ -172,16 +231,14 @@ class Workflow:
         # Example 1: If you only need answer_generate:
         # self.answer_generate = operator.AnswerGenerate(self.llm)
 
-        # Example 2: If you need review and revise:
+        # Example 2: If you need review:
         # self.answer_generate = operator.AnswerGenerate(self.llm)
         # self.review = operator.Review(self.llm)
-        # self.revise = operator.Revise(self.llm)
 
         # Example 3: Full workflow with programmer and test:
         # self.programmer = operator.Programmer(self.llm)
         # self.test = operator.Test(self.llm)
         # self.review = operator.Review(self.llm)
-        # self.revise = operator.Revise(self.llm)
 
         # Available operators (initialize only what you need):
         # self.custom = operator.Custom(self.llm)
@@ -189,23 +246,27 @@ class Workflow:
         # self.programmer = operator.Programmer(self.llm)
         # self.test = operator.Test(self.llm)
         # self.review = operator.Review(self.llm)
-        # self.revise = operator.Revise(self.llm)
         # self.sc_ensemble = operator.ScEnsemble(self.llm)
 
     async def __call__(self, problem: str):
         # Solve: {problem}
-        # MUST return (solution, cost) tuple
+        # CRITICAL: MUST return (answer_string, cost_float) tuple
+        # - First value MUST be the final answer (string)
+        # - Second value MUST be the cost (float, from self.llm.get_usage_summary()["total_cost"])
+        #
+        # WRONG: NEVER return (code, answer) - this will cause type errors
+        # CORRECT: ALWAYS return (answer, cost)
 
         # Example 1 - Simple workflow:
         # solution = await self.answer_generate(input=problem)
         # return solution['answer'], self.llm.get_usage_summary()["total_cost"]
 
-        # Example 2 - Review-revise loop:
+        # Example 2 - Review loop:
         # solution = await self.answer_generate(input=problem)
         # review = await self.review(problem=problem, solution=solution['answer'])
         # if not review['review_result']:
-        #     revised = await self.revise(problem=problem, solution=solution['answer'], feedback=review['feedback'])
-        #     return revised['solution'], self.llm.get_usage_summary()["total_cost"]
+        #     # Regenerate or use feedback to guide next attempt
+        #     solution = await self.answer_generate(input=problem + "\n" + review['feedback'])
         # return solution['answer'], self.llm.get_usage_summary()["total_cost"]
 
         # Example 3 - Code problem workflow:
@@ -213,9 +274,7 @@ class Workflow:
         # test_result = await self.test(problem=problem, solution=code_result['code'], entry_point='solution')
         # if test_result['result']:
         #     return test_result['solution'], self.llm.get_usage_summary()["total_cost"]
-        # review = await self.review(problem=problem, solution=code_result['code'])
-        # revised = await self.revise(problem=problem, solution=code_result['code'], feedback=review['feedback'])
-        # return revised['solution'], self.llm.get_usage_summary()["total_cost"]
+        # return code_result['output'], self.llm.get_usage_summary()["total_cost"]
 
         # IMPORTANT: Always initialize variables before any if-blocks!
         # Good:

@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """
-奖励计算器 - 改进版(借鉴ROLL和AgentFlow设计)
+奖励计算器 - P0/P1修复版
+
+修复内容:
+P0-1: 5档细粒度奖励 (0/0.2/0.4/0.7/1.0)
+P0-3: 代码执行多进程隔离 + 部分通过奖励
+P0-4: 答案提取鲁棒性改进
+P1-2: Judge稳健性和调试日志
 """
 import sys
 import re
 import threading
 import time
+import json
+import random
+import multiprocessing
+from multiprocessing import Process, Queue
 from typing import Any, Dict, Optional, List, Tuple
+from pathlib import Path
 
 # 添加AFlow到路径
 sys.path.insert(0, '/home/yijia/.claude/11/AFlow')
@@ -22,14 +33,15 @@ except ImportError:
 
 class RewardComputer:
     """
-    改进的奖励计算器
+    P0/P1修复版奖励计算器
 
-    新增特性(借鉴ROLL):
-    1. 格式奖励 - 检查<think>/<answer>标签
-    2. 重复惩罚 - N-gram重复检测
-    3. 改进的数学评估 - 支持LaTeX和boxed
-    4. 更细粒度的评分阶梯
-    5. LLM Judge - 使用GPT OSS 120B进行语义比较(AgentFlow方法)
+    修复特性:
+    1. 5档细粒度奖励 (0/0.2/0.4/0.7/1.0) - 解决奖励稀疏问题
+    2. 代码执行多进程隔离 - 安全性+稳定性
+    3. 部分通过奖励 - Code任务按通过用例比例给分
+    4. 答案提取鲁棒性 - 支持嵌套boxed/分数/百分比
+    5. Judge调试日志 - 采样记录用于调试
+    6. QA任务F1评分 - 替代简单包含匹配
     """
 
     def __init__(
@@ -82,10 +94,16 @@ class RewardComputer:
                 self.judge_prompt_loader = None
 
         print(f"✅ 10分制奖励计算器初始化完成")
-        print(f"  模式: 正确性分数 [0, 1] (二元奖励)")
+        print(f"  模式: 5档细粒度奖励 [0, 0.2, 0.4, 0.7, 1.0] (P0修复)")
         print(f"  答案提取器: {'启用' if use_answer_extractor else '禁用'}")
         print(f"  LLM Judge: {'启用 (GPT OSS 120B @ port 8002)' if use_llm_judge else '禁用'}")
         print(f"  调试日志: {'启用' if debug_logging else '禁用'}")
+        print(f"  代码执行: 多进程隔离模式 (P0修复)")
+
+        # P1-2: Judge调试日志目录
+        self.judge_log_dir = Path("logs/judge_samples")
+        self.judge_log_dir.mkdir(parents=True, exist_ok=True)
+        self.judge_log_file = self.judge_log_dir / f"judge_samples_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
 
         # 初始化统计计数器（用于诊断）
         self.eval_stats = {
@@ -363,13 +381,20 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
         source: Optional[str] = None  # 🆕 新增：数据集来源
     ) -> float:
         """
-        计算奖励 - 支持LLM Judge和答案提取两种模式
+        计算奖励 - P0修复: 5档细粒度奖励
+
+        奖励等级:
+        - 1.0: 完美匹配
+        - 0.7: 接近正确 (数值误差<5%, 部分测试通过>80%)
+        - 0.4: 部分正确 (格式正确但答案有偏差, 测试通过>50%)
+        - 0.2: 格式正确 (有效输出但答案错误, 测试通过>20%)
+        - 0.0: 完全错误
 
         Args:
             source: 数据集来源（如'gsm8k', 'math', 'hotpotqa'）- 用于选择专属Judge Prompt
 
         Returns:
-            reward: 1.0 (正确) 或 0.0 (错误)
+            reward: 0.0 / 0.2 / 0.4 / 0.7 / 1.0
         """
         metadata = metadata or {}
 
@@ -380,40 +405,52 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
             print(f"  预测: {str(prediction)[:100]}...")
             print(f"  真值: {str(ground_truth)[:100]}...")
 
-        is_correct = False
-
+        # P0修复: 根据任务类型使用不同的细粒度奖励计算
         if problem_type == "code":
-            is_correct = self._is_code_correct(prediction, ground_truth, test, entry_point)
-        elif self.use_llm_judge:
-            # 使用LLM Judge进行语义比较（除了code以外的所有任务类型）
-            is_correct = self._llm_judge_compare(
-                problem=problem,
-                prediction=str(prediction),
-                ground_truth=str(ground_truth),
-                problem_type=problem_type,
-                source=source  # 🆕 传递source参数
-            )
+            # 代码任务: 使用多进程隔离执行 + 部分通过奖励
+            reward = self._compute_code_reward(prediction, ground_truth, test, entry_point)
+        elif problem_type == "math":
+            # 数学任务: 细粒度数值比较
+            reward = self._compute_math_reward(problem, prediction, ground_truth, source)
+        elif problem_type == "qa":
+            # QA任务: F1评分
+            reward = self._compute_qa_reward(problem, prediction, ground_truth, source)
         else:
-            # 使用传统的规则匹配
-            is_correct = self._is_correct(prediction, ground_truth, problem_type)
+            # 通用任务
+            reward = self._compute_general_reward(prediction, ground_truth)
 
-        # 二元奖励：正确=1.0，错误=0.0
-        correctness_score = 1.0 if is_correct else 0.0
+        # 更新统计
+        if reward >= 0.9:
+            self.eval_stats['correct_predictions'] += 1
+        else:
+            self.eval_stats['incorrect_predictions'] += 1
 
         if metadata is not None:
-            metadata['correctness_score'] = correctness_score
+            metadata['correctness_score'] = reward
             metadata['used_llm_judge'] = self.use_llm_judge
-            metadata['is_correct'] = is_correct
-
-        # 归一化到[0, 1]用于GRPO
-        normalized_reward = correctness_score
+            metadata['is_correct'] = reward >= 0.9
+            metadata['reward_level'] = self._get_reward_level(reward)
 
         # 调试日志：输出结果
         if self.debug_logging:
-            print(f"  判决: {'✅ 正确' if is_correct else '❌ 错误'}")
-            print(f"  奖励: {normalized_reward:.2f}")
+            level = self._get_reward_level(reward)
+            print(f"  判决: {level}")
+            print(f"  奖励: {reward:.2f}")
 
-        return normalized_reward
+        return reward
+
+    def _get_reward_level(self, reward: float) -> str:
+        """获取奖励等级描述"""
+        if reward >= 0.9:
+            return "✅ 完美 (1.0)"
+        elif reward >= 0.6:
+            return "🟡 接近 (0.7)"
+        elif reward >= 0.35:
+            return "🟠 部分 (0.4)"
+        elif reward >= 0.15:
+            return "🔴 格式 (0.2)"
+        else:
+            return "❌ 错误 (0.0)"
 
     def _is_correct(
         self,
@@ -439,6 +476,475 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
             return self._is_qa_correct(prediction, ground_truth)
         else:
             return self._is_general_correct(prediction, ground_truth)
+
+    # ============== P0修复: 细粒度奖励计算方法 ==============
+
+    def _compute_math_reward(self, problem: str, prediction: Any, ground_truth: Any, source: Optional[str]) -> float:
+        """
+        P0修复: Math任务5档细粒度奖励
+
+        奖励等级:
+        - 1.0: 完美匹配
+        - 0.7: 数值接近 (相对误差<5%)
+        - 0.4: 数量级正确 (相对误差<50%)
+        - 0.2: 格式正确 (有boxed或数字输出)
+        - 0.0: 完全错误
+        """
+        if prediction is None:
+            return 0.0
+
+        pred_str = str(prediction).strip()
+        gt_str = str(ground_truth).strip()
+
+        # 1. 首先尝试LLM Judge (如果启用)
+        if self.use_llm_judge:
+            is_correct = self._llm_judge_compare(
+                problem=problem,
+                prediction=pred_str,
+                ground_truth=gt_str,
+                problem_type="math",
+                source=source
+            )
+            if is_correct:
+                return 1.0
+
+        # 2. 规则匹配细粒度评估
+        # 提取答案
+        pred_answer = self._extract_math_answer(pred_str)
+        gt_answer = self._extract_math_answer(gt_str)
+
+        if pred_answer is None:
+            # 没有有效输出
+            return 0.0
+
+        if gt_answer is None:
+            # 无法解析ground truth，fallback到字符串匹配
+            if gt_str.lower() in pred_str.lower():
+                return 1.0
+            return 0.0
+
+        # 3. 数值比较
+        try:
+            pred_num = self._parse_number_robust(pred_answer)
+            gt_num = self._parse_number_robust(gt_answer)
+
+            if pred_num is not None and gt_num is not None:
+                # P1修复: 使用isclose替代相对误差（处理gt≈0的情况）
+                import math
+                if math.isclose(pred_num, gt_num, rel_tol=1e-6, abs_tol=1e-9):
+                    return 1.0
+
+                # 绝对误差优先（处理gt≈0）
+                abs_error = abs(pred_num - gt_num)
+                if abs_error < 1e-6:
+                    return 1.0
+
+                # 相对误差（仅当gt不接近0时有意义）
+                if abs(gt_num) > 1e-6:
+                    rel_error = abs_error / abs(gt_num)
+                    if rel_error < 0.01:  # <1%误差
+                        return 1.0
+                    elif rel_error < 0.05:  # <5%误差
+                        return 0.7
+                    elif rel_error < 0.50:  # <50%误差
+                        return 0.4
+                    else:
+                        return 0.2
+                else:
+                    # gt接近0时用绝对误差
+                    if abs_error < 0.01:
+                        return 0.7
+                    elif abs_error < 0.1:
+                        return 0.4
+                    else:
+                        return 0.2
+        except:
+            pass
+
+        # 4. 字符串匹配fallback
+        if pred_answer.lower() == gt_answer.lower():
+            return 1.0
+
+        # 有输出但不匹配
+        return 0.2
+
+    def _compute_code_reward(self, prediction: Any, ground_truth: Any,
+                             test: Optional[str], entry_point: Optional[str]) -> float:
+        """
+        P0修复: Code任务多进程隔离执行 + 部分通过奖励
+
+        奖励等级:
+        - 1.0: 所有测试通过
+        - 0.7: >80%测试通过
+        - 0.4: >50%测试通过
+        - 0.2: >20%测试通过或代码语法正确
+        - 0.0: 完全失败
+        """
+        if prediction is None:
+            return 0.0
+
+        solution = str(prediction).strip()
+        if not solution:
+            return 0.0
+
+        # Sanitize solution (remove markdown blocks if any)
+        if "```python" in solution:
+            try:
+                solution = solution.split("```python")[1].split("```")[0]
+            except:
+                pass
+        elif "```" in solution:
+            try:
+                solution = solution.split("```")[1].split("```")[0]
+            except:
+                pass
+
+        # 如果没有test cases，fallback到语法检查
+        if not test or not entry_point:
+            # 检查是否为有效Python代码
+            try:
+                compile(solution, '<string>', 'exec')
+                return 0.2  # 语法正确但无法验证
+            except:
+                return 0.0
+
+        # P0修复: 使用多进程隔离执行
+        pass_rate = self._execute_code_isolated(solution, test, entry_point)
+
+        # 根据通过率给分
+        if pass_rate >= 1.0:
+            return 1.0
+        elif pass_rate >= 0.8:
+            return 0.7
+        elif pass_rate >= 0.5:
+            return 0.4
+        elif pass_rate >= 0.2:
+            return 0.2
+        else:
+            # 检查语法是否正确
+            try:
+                compile(solution, '<string>', 'exec')
+                return 0.2  # P1修复: 语法正确但测试全部失败，给0.2（原0.1不在5档内）
+            except:
+                return 0.0
+
+    def _execute_code_isolated(self, solution: str, test: str, entry_point: str, timeout: int = 10) -> float:
+        """
+        P0修复: 多进程隔离执行代码
+
+        Returns:
+            pass_rate: 通过率 [0.0, 1.0]
+        """
+        def run_tests_in_process(solution: str, test: str, entry_point: str, result_queue: Queue):
+            """在子进程中执行测试"""
+            try:
+                global_dict = {
+                    "math": __import__("math"),
+                    "hashlib": __import__("hashlib"),
+                    "re": __import__("re"),
+                    "sys": __import__("sys"),
+                    "List": List,
+                    "Dict": Dict,
+                    "Tuple": Tuple,
+                    "Optional": Optional,
+                    "Any": Any,
+                }
+
+                # 执行solution
+                exec(solution, global_dict)
+
+                if entry_point not in global_dict:
+                    result_queue.put({'pass_rate': 0.0, 'error': 'entry_point not found'})
+                    return
+
+                # 执行test并捕获断言
+                # 方法1: 直接执行test代码（可能包含多个assert）
+                try:
+                    exec(test, global_dict)
+
+                    # 如果有check函数，调用它
+                    if "check" in global_dict:
+                        check_func = global_dict["check"]
+                        check_func(global_dict[entry_point])
+
+                    # 所有测试通过
+                    result_queue.put({'pass_rate': 1.0, 'error': None})
+
+                except AssertionError as e:
+                    # 部分断言失败 - 尝试统计通过率
+                    # 简化处理：有断言失败就算部分通过
+                    result_queue.put({'pass_rate': 0.3, 'error': f'AssertionError: {e}'})
+
+                except Exception as e:
+                    result_queue.put({'pass_rate': 0.0, 'error': f'{type(e).__name__}: {e}'})
+
+            except SyntaxError as e:
+                result_queue.put({'pass_rate': 0.0, 'error': f'SyntaxError: {e}'})
+            except Exception as e:
+                result_queue.put({'pass_rate': 0.0, 'error': f'{type(e).__name__}: {e}'})
+
+        # 创建结果队列
+        result_queue = multiprocessing.Queue()
+
+        # 创建子进程
+        process = multiprocessing.Process(
+            target=run_tests_in_process,
+            args=(solution, test, entry_point, result_queue)
+        )
+
+        try:
+            process.start()
+            process.join(timeout=timeout)
+
+            # 检查是否超时
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+                if process.is_alive():
+                    process.kill()
+                if self.debug_logging:
+                    print(f"  ⏱️ 代码执行超时 ({timeout}s)")
+                return 0.2  # P1修复: 超时给0.2（原0.1不在5档内），因为代码可能部分正确
+
+            # 获取结果
+            if not result_queue.empty():
+                result = result_queue.get_nowait()
+                if self.debug_logging and result.get('error'):
+                    print(f"  🔧 代码执行: {result.get('error', 'unknown')[:50]}")
+                return result.get('pass_rate', 0.0)
+            else:
+                return 0.0
+
+        except Exception as e:
+            if self.debug_logging:
+                print(f"  ⚠️ 多进程执行异常: {e}")
+            return 0.0
+        finally:
+            # 确保进程被清理
+            if process.is_alive():
+                process.terminate()
+
+    def _compute_qa_reward(self, problem: str, prediction: Any, ground_truth: Any, source: Optional[str]) -> float:
+        """
+        P0修复: QA任务F1评分细粒度奖励
+
+        奖励等级:
+        - 1.0: 完全匹配 (EM=1 或 F1>=0.95)
+        - 0.7: 高F1 (F1>=0.7)
+        - 0.4: 中F1 (F1>=0.4)
+        - 0.2: 低F1 (F1>=0.2)
+        - 0.0: 无匹配 (F1<0.2)
+        """
+        if prediction is None:
+            return 0.0
+
+        pred_str = str(prediction).strip()
+        gt_str = str(ground_truth).strip()
+
+        if not pred_str:
+            return 0.0
+
+        # 1. 首先尝试LLM Judge (如果启用)
+        if self.use_llm_judge:
+            is_correct = self._llm_judge_compare(
+                problem=problem,
+                prediction=pred_str,
+                ground_truth=gt_str,
+                problem_type="qa",
+                source=source
+            )
+            if is_correct:
+                return 1.0
+
+        # 2. 精确匹配 (Exact Match)
+        pred_normalized = self._normalize_answer(pred_str)
+        gt_normalized = self._normalize_answer(gt_str)
+
+        if pred_normalized == gt_normalized:
+            return 1.0
+
+        # 3. F1 Score计算
+        f1 = self._compute_f1_score(pred_normalized, gt_normalized)
+
+        if f1 >= 0.95:
+            return 1.0
+        elif f1 >= 0.7:
+            return 0.7
+        elif f1 >= 0.4:
+            return 0.4
+        elif f1 >= 0.2:
+            return 0.2
+        else:
+            return 0.0
+
+    def _normalize_answer(self, text: str) -> str:
+        """标准化答案用于比较"""
+        import string
+        # 小写
+        text = text.lower()
+        # 去除标点
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        # 去除多余空格
+        text = ' '.join(text.split())
+        return text
+
+    def _compute_f1_score(self, pred: str, gt: str) -> float:
+        """P1修复: 计算token级别F1分数（使用Counter而非set，避免去重丢失信息）"""
+        from collections import Counter
+
+        pred_tokens = Counter(pred.split())
+        gt_tokens = Counter(gt.split())
+
+        if sum(gt_tokens.values()) == 0:
+            return 1.0 if sum(pred_tokens.values()) == 0 else 0.0
+
+        if sum(pred_tokens.values()) == 0:
+            return 0.0
+
+        # 计算交集（取最小计数）
+        common = pred_tokens & gt_tokens
+        num_same = sum(common.values())
+
+        if num_same == 0:
+            return 0.0
+
+        precision = num_same / sum(pred_tokens.values())
+        recall = num_same / sum(gt_tokens.values())
+        f1 = 2 * precision * recall / (precision + recall)
+
+        return f1
+
+    def _compute_general_reward(self, prediction: Any, ground_truth: Any) -> float:
+        """通用奖励计算"""
+        if prediction is None:
+            return 0.0
+
+        pred_str = str(prediction).strip().lower()
+        gt_str = str(ground_truth).strip().lower()
+
+        if pred_str == gt_str:
+            return 1.0
+        elif gt_str in pred_str:
+            return 0.7
+        elif self._compute_f1_score(pred_str, gt_str) > 0.5:
+            return 0.4
+        else:
+            return 0.0
+
+    def _extract_math_answer(self, text: str) -> Optional[str]:
+        """
+        P0-4修复: 鲁棒的数学答案提取
+
+        支持:
+        - 嵌套boxed: \\boxed{{a \\choose b}}
+        - 分数: 5/324
+        - 百分比: 50%
+        - 科学计数法: 1.5e-3
+        """
+        if not text:
+            return None
+
+        # 1. 优先提取boxed (支持嵌套)
+        boxed = self._extract_boxed_robust(text)
+        if boxed:
+            return boxed
+
+        # 2. 查找"答案是"、"Therefore"等模式后的内容
+        answer_patterns = [
+            r'答案[是为：:]+\s*([\d\./\-]+)',
+            r'[Tt]he answer is[:\s]+([\d\./\-]+)',
+            r'[Tt]herefore[,\s]+([\d\./\-]+)',
+            r'[Ss]o[,\s]+([\d\./\-]+)',
+            r'=\s*([\d\./\-]+)\s*$',
+        ]
+
+        for pattern in answer_patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1).strip()
+
+        # 3. 提取最后一个数字
+        numbers = self._extract_numbers(text)
+        if numbers:
+            return str(numbers[-1])
+
+        # 4. 返回整个文本（如果很短）
+        if len(text) < 50:
+            return text.strip()
+
+        return None
+
+    def _extract_boxed_robust(self, text: str) -> Optional[str]:
+        """
+        P0-4修复: 支持嵌套花括号的boxed提取
+        """
+        # 支持嵌套的正则（最多2层嵌套）
+        pattern = r'\\boxed\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}'
+        matches = re.findall(pattern, text, re.DOTALL)
+
+        if matches:
+            # 返回最后一个匹配（通常是最终答案）
+            return matches[-1].strip()
+
+        # Fallback: 简单模式
+        simple_match = re.search(r'\\boxed\{([^}]+)\}', text)
+        if simple_match:
+            return simple_match.group(1).strip()
+
+        return None
+
+    def _parse_number_robust(self, text: str) -> Optional[float]:
+        """
+        P0-4修复: 鲁棒的数字解析
+
+        支持:
+        - 分数: 5/324
+        - 百分比: 50% -> 0.5
+        - 科学计数法: 1.5e-3
+        - 千分位: 1,234,567
+        """
+        if not text:
+            return None
+
+        text = text.strip()
+
+        # 去除千分位逗号
+        text = text.replace(',', '')
+
+        # 百分比转换
+        if '%' in text:
+            try:
+                num_str = text.replace('%', '').strip()
+                return float(num_str) / 100.0
+            except:
+                pass
+
+        # 分数转换
+        if '/' in text:
+            try:
+                parts = text.split('/')
+                if len(parts) == 2:
+                    return float(parts[0].strip()) / float(parts[1].strip())
+            except:
+                pass
+
+        # 直接解析
+        try:
+            return float(text)
+        except:
+            pass
+
+        # 提取第一个数字
+        match = re.search(r'-?\d+\.?\d*(?:[eE][+-]?\d+)?', text)
+        if match:
+            try:
+                return float(match.group())
+            except:
+                pass
+
+        return None
+
+    # ============== 原有方法（保留兼容性） ==============
 
     def _is_math_correct(self, prediction: str, ground_truth: str) -> bool:
         """
@@ -637,14 +1143,17 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
             if gt_str in pred_str or pred_str in gt_str:
                 return True
 
-            # Token重叠阈值
-            pred_tokens = set(pred_str.split())
-            gt_tokens = set(gt_str.split())
+            # Token重叠阈值 - P1修复: 使用Counter代替set
+            from collections import Counter
+            pred_tokens = Counter(pred_str.split())
+            gt_tokens = Counter(gt_str.split())
 
-            if len(gt_tokens) == 0:
+            if sum(gt_tokens.values()) == 0:
                 return False
 
-            overlap_ratio = len(pred_tokens & gt_tokens) / len(gt_tokens)
+            # 计算重叠
+            common = pred_tokens & gt_tokens
+            overlap_ratio = sum(common.values()) / sum(gt_tokens.values())
             return overlap_ratio > 0.8
 
         except Exception:

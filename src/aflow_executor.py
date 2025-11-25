@@ -293,12 +293,34 @@ class AFlowExecutor:
             if isinstance(result, tuple):
                 if len(result) >= 2:
                     answer, cost = result[0], result[1]
+
+                    # 类型验证和修正
+                    if not isinstance(cost, (int, float)):
+                        print(f"  警告: cost类型错误 ({type(cost).__name__})，尝试修正...")
+                        # 检查是否answer和cost位置反了
+                        if isinstance(answer, (int, float)) and isinstance(cost, str):
+                            print(f"  检测到answer和cost顺序反转，交换...")
+                            answer, cost = cost, answer
+                        else:
+                            # cost是字符串但不是数字，设为0
+                            print(f"  cost包含非数字内容，设为0.0")
+                            if len(str(cost)) <= 100:
+                                print(f"     cost内容: {cost}")
+                            else:
+                                print(f"     cost内容预览: {str(cost)[:100]}...")
+                            cost = 0.0
+
                 elif len(result) == 1:
                     answer, cost = result[0], 0.0
                 else:
                     answer, cost = None, 0.0
             else:
                 answer, cost = result, 0.0
+
+            # 最终类型确保
+            if not isinstance(cost, (int, float)):
+                print(f"  cost最终类型仍然错误，强制设为0.0")
+                cost = 0.0
 
             execution_time = time.time() - start_time
 
@@ -574,21 +596,17 @@ Problem:
 Provide the final answer clearly."""
 
                         # 直接调用LLM，不使用任何operator
-                        response = await self.llm.agenerate(
-                            messages=[{"role": "user", "content": prompt}],
-                            max_tokens=2048
-                        )
+                        # 使用正确的 AsyncLLM __call__ 接口
+                        answer = await self.llm(prompt)
 
-                        if response:
-                            usage = self.llm.get_usage_summary()
-                            if isinstance(usage, dict) and "total_cost" in usage:
-                                cost = usage["total_cost"]
-                            else:
-                                cost = 0.0
+                        # 获取成本
+                        usage = self.llm.get_usage_summary()
+                        if isinstance(usage, dict) and "total_cost" in usage:
+                            cost = usage["total_cost"]
+                        else:
+                            cost = 0.0
 
-                            # 提取response文本
-                            answer = response.get('text') or response.get('response', str(response))
-                            return answer, cost
+                        return answer, cost
 
                     except Exception as e:
                         print(f"  ⚠️  Fallback直接调用LLM失败: {e}")
