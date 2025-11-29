@@ -15,17 +15,28 @@ class DataManager:
         self,
         data_dir: str = "data",
         domain_ratios: Optional[Dict[str, float]] = None,
-        shuffle: bool = True
+        shuffle: bool = True,
+        train_dataset: Optional[str] = None,  # P6: 支持配置文件指定训练集路径
+        val_dataset: Optional[str] = None,
+        test_dataset: Optional[str] = None
     ):
         """
         Args:
             data_dir: 数据目录
             domain_ratios: 领域采样比例，如 {"math": 0.4, "code": 0.3, "qa": 0.3}
             shuffle: 是否打乱数据
+            train_dataset: 训练集路径 (可选，优先于默认路径)
+            val_dataset: 验证集路径 (可选)
+            test_dataset: 测试集路径 (可选)
         """
         self.data_dir = Path(data_dir)
         self.domain_ratios = domain_ratios or {"math": 0.4, "code": 0.3, "qa": 0.3}
         self.shuffle = shuffle
+
+        # P6: 存储配置的数据集路径
+        self.train_dataset_path = train_dataset
+        self.val_dataset_path = val_dataset
+        self.test_dataset_path = test_dataset
 
         # 加载的数据
         self.train_data = {"math": [], "code": [], "qa": []}
@@ -75,28 +86,48 @@ class DataManager:
                     dataset_file = self.data_dir / f"processed/{split}_mixed.jsonl"
                     print(f"⚠️  ready_to_train/test.jsonl不存在，使用processed/{split}_mixed.jsonl")
         else:
-            # 训练数据：优先使用ready_to_train/train_llm_cleaned.jsonl（2000样本混合数据集）
+            # 训练数据：P6修复 - 优先使用配置的数据集路径
             if split == "train":
-                ready_train_file = self.data_dir / "ready_to_train/train_llm_cleaned.jsonl"
-                if ready_train_file.exists():
-                    dataset_file = ready_train_file
-                    print(f"✅ 使用ready_to_train训练集: {ready_train_file.name}")
-                else:
-                    # 后备：使用mixed目录的大数据集
-                    fixed_file = self.data_dir / "mixed/train_mixed_with_math_fixed.jsonl"
-                    math_file = self.data_dir / "mixed/train_mixed_with_math.jsonl"
-                    balanced_file = self.data_dir / "mixed/train_mixed_balanced.jsonl"
-
-                    if fixed_file.exists():
-                        dataset_file = fixed_file
-                        print(f"⚠️  ready_to_train/train_llm_cleaned.jsonl不存在，使用: {fixed_file.name}")
-                    elif math_file.exists():
-                        dataset_file = math_file
-                        print(f"⚠️  使用后备训练集: {math_file.name}")
-                    elif balanced_file.exists():
-                        dataset_file = balanced_file
+                if self.train_dataset_path:
+                    # 使用配置指定的路径
+                    config_path = Path(self.train_dataset_path)
+                    if not config_path.is_absolute():
+                        config_path = Path.home() / ".claude" / self.train_dataset_path
+                    if config_path.exists():
+                        dataset_file = config_path
+                        print(f"✅ 使用配置训练集: {config_path}")
                     else:
-                        dataset_file = self.data_dir / f"mixed/{split}_mixed.jsonl"
+                        print(f"⚠️  配置训练集不存在: {config_path}，尝试默认路径")
+                        self.train_dataset_path = None  # 清除，使用默认
+
+                if not self.train_dataset_path:
+                    # 后备：默认路径
+                    ready_train_file = self.data_dir / "ready_to_train/train_10k_final.jsonl"  # P6: 更新默认路径
+                    if ready_train_file.exists():
+                        dataset_file = ready_train_file
+                        print(f"✅ 使用ready_to_train训练集: {ready_train_file.name}")
+                    else:
+                        # 进一步后备
+                        ready_train_file = self.data_dir / "ready_to_train/train_llm_cleaned.jsonl"
+                        if ready_train_file.exists():
+                            dataset_file = ready_train_file
+                            print(f"✅ 使用ready_to_train训练集: {ready_train_file.name}")
+                        else:
+                            # 后备：使用mixed目录的大数据集
+                            fixed_file = self.data_dir / "mixed/train_mixed_with_math_fixed.jsonl"
+                            math_file = self.data_dir / "mixed/train_mixed_with_math.jsonl"
+                            balanced_file = self.data_dir / "mixed/train_mixed_balanced.jsonl"
+
+                            if fixed_file.exists():
+                                dataset_file = fixed_file
+                                print(f"⚠️  使用后备: {fixed_file.name}")
+                            elif math_file.exists():
+                                dataset_file = math_file
+                                print(f"⚠️  使用后备: {math_file.name}")
+                            elif balanced_file.exists():
+                                dataset_file = balanced_file
+                            else:
+                                dataset_file = self.data_dir / f"mixed/{split}_mixed.jsonl"
             else:
                 dataset_file = self.data_dir / f"mixed/{split}_mixed.jsonl"
             if not dataset_file.exists():

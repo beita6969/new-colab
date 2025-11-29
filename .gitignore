@@ -46,6 +46,26 @@ config/**/aflow_llm*.yaml
 *.key
 backup*/
 
+# Data files to exclude (keep only training data)
+data/datasets/
+data/experience_buffer/
+data/raw/
+data/raw_filtered/
+data/processed/
+data/mixed/
+data/final_mix/
+data/agentflow/
+data/gsm8k/
+data/math/
+data/humaneval/
+data/mbpp/
+data/hotpotqa/
+data/drop/
+*.backup
+tester.txt
+data.csv
+output.json
+
 # IDE
 .vscode/
 .idea/

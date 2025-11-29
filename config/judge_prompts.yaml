@@ -197,6 +197,46 @@ mbpp:
     {{{output_format}}}
 
 # ============================================
+# Code LLM Judge 配置 (P5修复)
+# 用于没有测试用例的代码样本
+# ============================================
+code_llm_judge:
+  enabled: true
+  description: "Code semantic comparison for samples without test cases"
+
+  # Judge提示词 - 专门用于代码语义比较
+  judge_prompt: |
+    You are a code evaluator. Determine if the predicted code is functionally equivalent to the ground truth solution.
+
+    **Problem Description**: {{{problem}}}
+
+    **Predicted Code**:
+    ```python
+    {{{prediction}}}
+    ```
+
+    **Ground Truth Solution**:
+    ```python
+    {{{ground_truth}}}
+    ```
+
+    **Evaluation Rules**:
+    1. **Functional equivalence**: Do both codes solve the same problem correctly?
+    2. **Variable names**: Different variable names are OK (e.g., `result` vs `output`)
+    3. **Implementation approach**: Different algorithms are OK if they produce the same result
+    4. **Edge cases**: Consider if both handle edge cases similarly
+    5. **Syntax**: Minor syntax differences (spacing, quotes) don't matter
+    6. **Imports**: Different import styles are OK if functionality is the same
+
+    **Important**:
+    - Focus on FUNCTIONAL equivalence, not textual similarity
+    - If the prediction solves the problem correctly (even with a different approach), mark as True
+    - If the prediction has logic errors or doesn't solve the problem, mark as False
+    - If unsure, consider what outputs both would produce for typical inputs
+
+    {{{output_format}}}
+
+# ============================================
 # HotpotQA 数据集 Judge 配置
 # ============================================
 hotpotqa:
@@ -242,7 +282,7 @@ squad_v2:
     - remove_punctuation: true
     - trim_whitespace: true
 
-  # Judge提示词（类似HotpotQA但更严格）
+  # Judge提示词（支持语义等价和上下位词）
   judge_prompt: |
     You are an answer evaluator for reading comprehension questions.
 
@@ -254,8 +294,13 @@ squad_v2:
     **Guidelines**:
     - Case insensitive: "Paris" = "paris"
     - Ignore articles and punctuation: "the Eiffel Tower" = "Eiffel Tower"
-    - Consider semantic equivalence: "capital" = "capital city"
+    - **Semantic equivalence**: "capital" = "capital city"
+    - **Hyponym/Hypernym**: A general term matches a specific term if contextually correct
+      - "watch" = "pocketwatch" (watch is a hypernym of pocketwatch)
+      - "animal" = "dog" (if answer is about a dog being an animal)
+    - **Substring in compound words**: "watch" in "pocketwatch" counts as match
     - Substring match OK: "The answer is Paris" contains "Paris"
+    - **Be lenient**: If the prediction captures the essential meaning, mark as True
 
     {{{output_format}}}
 
@@ -333,6 +378,11 @@ dataset_mapping:
   code:
     - humaneval
     - mbpp
+    - bigcodebench
+    - mbppplus
+    - humanevalplus
+    - code_exercises
+    - code_llm_judge
 
   qa:
     - hotpotqa
@@ -346,6 +396,11 @@ dataset_mapping:
     math: "math"
     humaneval: "humaneval"
     mbpp: "mbpp"
+    bigcodebench: "humaneval"     # 使用humaneval配置
+    mbppplus: "mbpp"              # 使用mbpp配置
+    humanevalplus: "humaneval"    # 使用humaneval配置
+    code_exercises: "code_llm_judge"  # P5: 无测试用例，使用LLM Judge
+    code_llm_judge: "code_llm_judge"  # P5: 专门的Code LLM Judge
     hotpotqa: "hotpotqa"
     squad_v2: "squad_v2"
     commonsenseqa: "commonsenseqa"

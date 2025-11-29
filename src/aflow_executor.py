@@ -158,6 +158,18 @@ class AFlowExecutor:
 
         start_time = time.time()
 
+        # 🔧 智能输入格式化：根据数据源注入context等信息
+        # 构造sample字典用于格式化（从kwargs提取相关字段）
+        sample_info = {
+            "problem": problem,
+            "problem_type": problem_type,
+            "source": kwargs.get("source", ""),
+            "context": kwargs.get("context", []),
+        }
+        formatted_problem = self._format_problem_by_source(problem, sample_info)
+        if formatted_problem != problem:
+            print(f"  📝 已格式化问题输入 (source={sample_info['source']})")
+
         # 1. 验证工作流代码
         is_valid, msg, validation_details = self.validator.validate_workflow_code(workflow_code, problem_type)
 
@@ -172,8 +184,8 @@ class AFlowExecutor:
                 print(f"✅ 自动修复成功")
                 workflow_code = fixed_code
             elif self.enable_fallback:
-                print(f"  使用Fallback工作流")
-                return await self._execute_fallback_workflow(problem, problem_type, **kwargs)
+                print(f"  返回验证错误信息")
+                return await self._execute_fallback_workflow(problem, problem_type, error_info=f"Validation failed: {msg}", **kwargs)
             else:
                 # Fallback禁用，抛出异常
                 raise ValueError(f"工作流代码无效且Fallback已禁用: {msg}")
@@ -204,16 +216,14 @@ class AFlowExecutor:
                     dataset=problem_type
                 )
             except Exception as e:
-                # 工作流实例化失败，使用fallback
+                # 工作流实例化失败，返回错误信息
                 print(f"⚠️  工作流实例化失败: {e}")
                 import traceback
                 traceback.print_exc()
-                print(f"  使用fallback工作流")
-                fallback_class = self._get_fallback_workflow_class(problem_type)
-                workflow = fallback_class(
-                    name="fallback_workflow",
-                    llm_config=llm_config,
-                    dataset=problem_type
+                return await self._execute_fallback_workflow(
+                    problem, problem_type,
+                    error_info=f"Workflow instantiation failed: {type(e).__name__}: {str(e)[:200]}",
+                    **kwargs
                 )
 
             # 执行（带超时）
@@ -224,7 +234,7 @@ class AFlowExecutor:
                     if "entry_point" in kwargs and "test" in kwargs:
                         try:
                             result = await asyncio.wait_for(
-                                workflow(problem, kwargs["entry_point"], kwargs["test"]),
+                                workflow(formatted_problem, kwargs["entry_point"], kwargs["test"]),
                                 timeout=self.timeout
                             )
                         except TypeError as e:
@@ -233,13 +243,13 @@ class AFlowExecutor:
                                 print(f"  ⚠️  Workflow不支持test参数，尝试只传entry_point")
                                 try:
                                     result = await asyncio.wait_for(
-                                        workflow(problem, kwargs["entry_point"]),
+                                        workflow(formatted_problem, kwargs["entry_point"]),
                                         timeout=self.timeout
                                     )
                                 except TypeError:
                                     print(f"  ⚠️  Workflow不支持entry_point参数，降级为只传problem")
                                     result = await asyncio.wait_for(
-                                        workflow(problem),
+                                        workflow(formatted_problem),
                                         timeout=self.timeout
                                     )
                             else:
@@ -248,14 +258,14 @@ class AFlowExecutor:
                         # Only entry_point available
                         try:
                             result = await asyncio.wait_for(
-                                workflow(problem, kwargs["entry_point"]),
+                                workflow(formatted_problem, kwargs["entry_point"]),
                                 timeout=self.timeout
                             )
                         except TypeError as e:
                             if "positional argument" in str(e):
                                 print(f"  ⚠️  Workflow不支持entry_point参数，降级为只传problem")
                                 result = await asyncio.wait_for(
-                                    workflow(problem),
+                                    workflow(formatted_problem),
                                     timeout=self.timeout
                                 )
                             else:
@@ -263,13 +273,13 @@ class AFlowExecutor:
                     else:
                         # No extra parameters
                         result = await asyncio.wait_for(
-                            workflow(problem),
+                            workflow(formatted_problem),
                             timeout=self.timeout
                         )
                 else:
-                    # Non-code problems
+                    # Non-code problems (使用格式化后的问题，包含context等)
                     result = await asyncio.wait_for(
-                        workflow(problem),
+                        workflow(formatted_problem),
                         timeout=self.timeout
                     )
             except Exception as e:
@@ -280,10 +290,14 @@ class AFlowExecutor:
                 print(f"  完整堆栈:")
                 traceback.print_exc()
 
-                # 检查是否启用Fallback
+                # 返回错误信息让模型学习
                 if self.enable_fallback:
-                    print(f"  🔄 尝试使用Fallback机制")
-                    return await self._execute_fallback_workflow(problem, problem_type, **kwargs)
+                    print(f"  🔄 返回执行错误信息")
+                    return await self._execute_fallback_workflow(
+                        problem, problem_type,
+                        error_info=f"Execution failed: {type(e).__name__}: {str(e)[:200]}",
+                        **kwargs
+                    )
                 else:
                     print(f"  ⚠️  Fallback已禁用，直接抛出异常")
                     # 直接抛出异常而不是使用fallback
@@ -323,6 +337,27 @@ class AFlowExecutor:
                 cost = 0.0
 
             execution_time = time.time() - start_time
+
+            # P0修复: 验证answer非空，空答案触发fallback
+            if answer is None or (isinstance(answer, str) and not answer.strip()):
+                print(f"  ⚠️  答案为空(None或空字符串)，触发fallback")
+                if self.enable_fallback:
+                    return await self._execute_fallback_workflow(
+                        problem, problem_type,
+                        error_info="Empty answer returned",
+                        **kwargs
+                    )
+                # fallback禁用时返回空字符串而非None
+                answer = ""
+
+            # P0修复: 检测无效答案模式
+            if isinstance(answer, str):
+                invalid_patterns = ['Based on the feedback', 'Revised Solution:', '```python\n```']
+                for pattern in invalid_patterns:
+                    if pattern in answer:
+                        print(f"  ⚠️  检测到无效答案模式: {pattern[:30]}")
+                        # 尝试清理
+                        answer = answer.replace(pattern, '').strip()
 
             # 元数据
             metadata = {
@@ -367,12 +402,37 @@ class AFlowExecutor:
 
     def _create_workflow_class(self, workflow_code: str, problem_type: str):
         """从工作流代码动态创建Workflow类"""
+        import re
+
+        print(f"  🔍 进入 _create_workflow_class，代码长度: {len(workflow_code)}", flush=True)
+
+        # 提取并打印operator列表（替代打印前10行代码）
+        operator_pattern = r'self\.(\w+)\s*=\s*operator\.(\w+)\('
+        operators_found = re.findall(operator_pattern, workflow_code)
+        if operators_found:
+            op_list = [f"{name}({op_type})" for name, op_type in operators_found]
+            print(f"  📦 Operators: {', '.join(op_list)}", flush=True)
+        else:
+            print(f"  📦 Operators: 未检测到 (可能是fallback)", flush=True)
+
+        # 🔧 关键新功能：检测并提取TASK_PROMPT用于问题增强
+        task_prompt_value = None
+        task_prompt_match = re.search(
+            r'TASK_PROMPT\s*=\s*(?:"""([^"]*(?:"(?!"")|[^"])*)"""|"([^"]*)"|\'([^\']*)\')',
+            workflow_code,
+            re.DOTALL
+        )
+        if task_prompt_match:
+            task_prompt_value = task_prompt_match.group(1) or task_prompt_match.group(2) or task_prompt_match.group(3)
+            if task_prompt_value:
+                print(f"  📝 检测到TASK_PROMPT，将自动增强问题输入", flush=True)
 
         # 准备命名空间
         namespace = {
             "operator": operator_module,
             "create_llm_instance": create_llm_instance,
-            "DatasetType": str
+            "DatasetType": str,
+            "__TASK_PROMPT__": task_prompt_value  # 注入到命名空间
         }
 
         # 替换import路径（使workspace路径可用）
@@ -382,9 +442,177 @@ class AFlowExecutor:
             "# operator already imported"
         )
 
+        # 🔧 关键修复：过滤掉不允许的import语句（防止aiofiles等问题）
+        # 使用更强大的过滤：基于AST检测所有import形式
+        import ast
+
+        allowed_imports = {
+            'operator', 'workspace', 'scripts', 'asyncio', 'typing',
+            'json', 're', 'math', 'collections', 'itertools', 'functools',
+            'abc', 'copy', 'dataclasses', 'enum', 'inspect', 'os', 'sys',
+            'time', 'traceback', 'types', 'warnings', 'random'
+        }
+
+        # 方法1: 基于AST的精确过滤
+        try:
+            tree = ast.parse(modified_code)
+            forbidden_imports = set()
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name.split('.')[0]
+                        if module_name not in allowed_imports:
+                            forbidden_imports.add(module_name)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        module_name = node.module.split('.')[0]
+                        if module_name not in allowed_imports:
+                            forbidden_imports.add(module_name)
+
+            if forbidden_imports:
+                print(f"  🚫 AST检测到禁止的导入: {forbidden_imports}", flush=True)
+                # 使用正则替换所有相关import
+                for mod in forbidden_imports:
+                    import re as re_module
+                    # 替换 import xxx 和 from xxx import
+                    modified_code = re_module.sub(
+                        rf'^(\s*)(import\s+{mod}[^\n]*)',
+                        r'\1# [FILTERED] \2',
+                        modified_code,
+                        flags=re_module.MULTILINE
+                    )
+                    modified_code = re_module.sub(
+                        rf'^(\s*)(from\s+{mod}[^\n]*)',
+                        r'\1# [FILTERED] \2',
+                        modified_code,
+                        flags=re_module.MULTILINE
+                    )
+                print(f"  📝 已过滤 {len(forbidden_imports)} 个禁止的模块导入", flush=True)
+        except SyntaxError as e:
+            print(f"  ⚠️ AST解析失败，使用简单过滤: {e}", flush=True)
+            # 方法2: 简单行级过滤作为备用
+            lines = modified_code.split('\n')
+            filtered_lines = []
+            filtered_count = 0
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith('import ') or stripped.startswith('from '):
+                    if stripped.startswith('import '):
+                        module = stripped.split()[1].split('.')[0]
+                    else:
+                        module = stripped.split()[1].split('.')[0]
+                    if module not in allowed_imports:
+                        print(f"  🚫 过滤导入: {stripped}", flush=True)
+                        filtered_lines.append(f"# [FILTERED] {line}")
+                        filtered_count += 1
+                        continue
+                filtered_lines.append(line)
+            modified_code = '\n'.join(filtered_lines)
+            if filtered_count > 0:
+                print(f"  📝 已过滤 {filtered_count} 个不允许的导入语句", flush=True)
+
         # 修复常见typo（RL模型可能产生的错误）
         modified_code = modified_code.replace("async_lll", "async_llm")
         modified_code = modified_code.replace("create_lll_instance", "create_llm_instance")
+
+        # P0修复: 扩展typo修复 - 修复self.lll/self.llll等变体
+        import re
+        # 修复 self.l{3,}m 类型的typo (self.lllm, self.llllm等)
+        modified_code = re.sub(r'\bself\.l{3,}m\b', 'self.llm', modified_code)
+        # 修复 async_l{3,}m 类型的typo
+        modified_code = re.sub(r'\basync_l{3,}m\b', 'async_llm', modified_code)
+        # 修复 create_l{3,}m_instance 类型的typo
+        modified_code = re.sub(r'\bcreate_l{3,}m_instance\b', 'create_llm_instance', modified_code)
+
+        # P1修复: 检测并修复顶层await问题 (RL模型可能生成 'await xxx' 在函数外)
+        import re
+        # 查找顶层await（不在async def内的await）
+        lines = modified_code.split('\n')
+        fixed_lines = []
+        in_async_func = False
+        indent_stack = []
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # 检测async def开始
+            if stripped.startswith('async def '):
+                in_async_func = True
+                # 计算缩进层级
+                indent = len(line) - len(line.lstrip())
+                indent_stack.append(indent)
+            # 检测函数结束（通过缩进变化）
+            elif indent_stack and stripped and not stripped.startswith('#'):
+                current_indent = len(line) - len(line.lstrip())
+                while indent_stack and current_indent <= indent_stack[-1]:
+                    indent_stack.pop()
+                if not indent_stack:
+                    in_async_func = False
+
+            # 检测顶层await
+            if stripped.startswith('await ') and not in_async_func:
+                # 将顶层await包装到一个临时async函数中
+                print(f"  🔧 修复顶层await: {stripped[:50]}...")
+                # 创建包装函数
+                indent = len(line) - len(line.lstrip())
+                wrapper = f"{' ' * indent}# [AUTO-FIXED] Wrapped top-level await\n"
+                wrapper += f"{' ' * indent}async def _auto_wrap_await():\n"
+                wrapper += f"{' ' * (indent + 4)}return {stripped}\n"
+                wrapper += f"{' ' * indent}_result = asyncio.get_event_loop().run_until_complete(_auto_wrap_await())"
+                fixed_lines.append(wrapper)
+                continue
+
+            fixed_lines.append(line)
+
+        modified_code = '\n'.join(fixed_lines)
+
+        # P2修复: 清理RL模型可能生成的无效类型注解 (如 Tuple.QA, List.Something)
+        # 这些会导致 AttributeError: QA 等错误
+        import re as regex_module
+        # 匹配类型注解中的无效属性访问: Tuple.XXX, List.YYY, Dict.ZZZ 等
+        invalid_type_patterns = [
+            r'(Tuple|List|Dict|Set|Optional|Union)\.(\w+)',  # Tuple.QA -> Any
+            r':\s*(QA|Math|Code)\b',  # : QA -> : Any
+            r'->\s*(QA|Math|Code)\b',  # -> QA -> -> Any
+        ]
+        for pattern in invalid_type_patterns:
+            if regex_module.search(pattern, modified_code):
+                print(f"  🔧 P2修复: 清理无效类型注解模式 {pattern[:30]}...")
+                modified_code = regex_module.sub(pattern, r'Any', modified_code)
+
+        # 确保Any类型可用
+        if 'Any' in modified_code and 'from typing import' in modified_code:
+            # 检查是否已导入Any
+            if ', Any' not in modified_code and 'Any,' not in modified_code and 'import Any' not in modified_code:
+                modified_code = modified_code.replace('from typing import', 'from typing import Any, ')
+
+        # P2修复增强: 在__call__方法开头自动初始化常用变量，防止UnboundLocalError
+        # 查找 async def __call__ 并在其后插入变量初始化
+        call_init_vars = '''
+        # [AUTO-INIT] 防止条件分支导致的UnboundLocalError
+        result = None
+        solution = None
+        code = None
+        answer = None
+        prog_result = None
+        review_result = None
+        test_result = None
+        revised = None
+        cost = 0.0
+        '''
+        # 使用正则找到 async def __call__ 的方法体开始位置
+        call_match = regex_module.search(r'(async def __call__\([^)]*\)[^:]*:)\s*\n', modified_code)
+        if call_match:
+            # 检测下一行的缩进
+            end_pos = call_match.end()
+            next_line_match = regex_module.search(r'^([ \t]+)', modified_code[end_pos:], regex_module.MULTILINE)
+            if next_line_match:
+                base_indent = next_line_match.group(1)
+                # 格式化初始化代码，使用正确的缩进
+                formatted_init = '\n'.join(base_indent + line.strip() for line in call_init_vars.strip().split('\n') if line.strip())
+                # 插入到__call__方法体开头
+                modified_code = modified_code[:end_pos] + formatted_init + '\n' + modified_code[end_pos:]
+                print(f"  🔧 P2修复: 已在__call__中自动初始化防护变量")
 
         try:
             # 执行代码创建类
@@ -394,14 +622,42 @@ class AFlowExecutor:
             if "Workflow" not in namespace:
                 raise ValueError("No Workflow class found in generated code")
 
-            return namespace["Workflow"]
+            WorkflowClass = namespace["Workflow"]
+
+            # 🔧 关键新功能：如果有TASK_PROMPT，创建包装类自动增强问题输入
+            if task_prompt_value:
+                # 创建增强版Workflow类
+                class EnhancedWorkflow:
+                    """自动将TASK_PROMPT注入到问题输入中的包装器"""
+                    _task_prompt = task_prompt_value
+                    _original_class = WorkflowClass
+
+                    def __init__(self, name: str, llm_config, dataset):
+                        # P2修复: 使用object.__setattr__避免__getattr__递归问题
+                        object.__setattr__(self, '_instance', self._original_class(name, llm_config, dataset))
+
+                    async def __call__(self, problem: str, *args, **kwargs):
+                        # 自动增强问题输入（支持任意额外参数）
+                        enhanced_problem = f"{self._task_prompt}\n\nProblem:\n{problem}"
+                        result = await self._instance(enhanced_problem, *args, **kwargs)
+                        # P2修复: 确保返回值是可解包的tuple而非coroutine
+                        return result
+
+                    def __getattr__(self, name):
+                        # P2修复: 防止访问不存在的_instance导致递归
+                        if name == '_instance':
+                            raise AttributeError(f"'{type(self).__name__}' object has no attribute '_instance'")
+                        return getattr(object.__getattribute__(self, '_instance'), name)
+
+                print(f"  ✨ 创建EnhancedWorkflow包装器（自动注入TASK_PROMPT）")
+                return EnhancedWorkflow
+
+            return WorkflowClass
 
         except Exception as e:
             print(f"⚠️  生成的工作流代码有错误: {e}")
-            print(f"  使用默认fallback工作流")
-
-            # 使用简单的默认工作流作为fallback
-            return self._get_fallback_workflow_class(problem_type)
+            # 抛出异常，让上层处理并返回错误信息
+            raise ValueError(f"Workflow code compilation failed: {type(e).__name__}: {str(e)[:200]}")
 
     def _get_llm_config(self):
         """获取LLM配置（确保返回正确类型）"""
@@ -435,122 +691,120 @@ class AFlowExecutor:
             print(f"  降级为字符串模式: {self.llm_model_name}")
             return self.llm_model_name
 
+    def _format_problem_by_source(self, problem: str, sample: dict) -> str:
+        """
+        根据数据源格式化问题输入（Option A: 智能输入格式化）
+
+        不同数据集需要不同的输入格式：
+        - HotpotQA/SQuAD: 需要注入context到problem中
+        - HumanEval: 保持原格式（已包含函数签名和docstring）
+        - GSM8K/MATH: 直接使用problem
+
+        Args:
+            problem: 原始问题文本
+            sample: 完整的样本字典，包含source、context等字段
+
+        Returns:
+            格式化后的问题文本
+        """
+        source = sample.get("source", "").lower()
+        problem_type = sample.get("problem_type", "math")
+
+        # 1. HotpotQA: 需要注入context
+        if source == "hotpotqa" or "hotpot" in source:
+            context = sample.get("context", [])
+            if context:
+                # HotpotQA context格式: [[title, [sentences...]], ...]
+                context_str = ""
+                if isinstance(context, list):
+                    for item in context:
+                        if isinstance(item, list) and len(item) >= 2:
+                            title = item[0] if isinstance(item[0], str) else ""
+                            paragraphs = item[1] if isinstance(item[1], list) else []
+                            if paragraphs:
+                                context_str += f"\n{title}:\n" + " ".join(paragraphs)
+                        elif isinstance(item, str):
+                            context_str += "\n" + item
+                if context_str:
+                    return f"Context:{context_str}\n\nQuestion: {problem}\n\nAnswer:"
+            return f"Question: {problem}\n\nAnswer:"
+
+        # 2. SQuAD: 类似处理
+        elif source == "squad" or "squad" in source:
+            context = sample.get("context", "")
+            if context and isinstance(context, str):
+                return f"Context: {context}\n\nQuestion: {problem}\n\nAnswer:"
+            return f"Question: {problem}\n\nAnswer:"
+
+        # 3. HumanEval: 保持原格式（已包含完整函数签名）
+        elif source == "humaneval" or problem_type == "code":
+            # HumanEval的problem已经是完整的函数签名+docstring
+            return problem
+
+        # 4. GSM8K/MATH: 直接使用problem
+        elif source in ["gsm8k", "math"] or problem_type == "math":
+            return problem
+
+        # 5. 通用QA问题: 检查是否有context需要注入 (P1修复)
+        elif problem_type == "qa":
+            context = sample.get("context", "")
+            if context:
+                # 处理context为列表或字符串的情况
+                if isinstance(context, list):
+                    context_str = ""
+                    for item in context:
+                        if isinstance(item, list) and len(item) >= 2:
+                            title = item[0] if isinstance(item[0], str) else ""
+                            paragraphs = item[1] if isinstance(item[1], list) else []
+                            if paragraphs:
+                                context_str += f"\n{title}:\n" + " ".join(paragraphs)
+                        elif isinstance(item, str):
+                            context_str += "\n" + item
+                    if context_str:
+                        return f"Context:{context_str}\n\nQuestion: {problem}\n\nAnswer:"
+                elif isinstance(context, str) and context.strip():
+                    return f"Context: {context}\n\nQuestion: {problem}\n\nAnswer:"
+            # P1修复: 无context时，添加简单提示词指导模型基于知识回答
+            return f"Question: {problem}\n\nPlease answer the question based on your knowledge. Answer:"
+
+        # 6. 默认: 直接返回原问题
+        return problem
+
     async def _execute_fallback_workflow(
         self,
         problem: str,
         problem_type: str,
+        error_info: str = "",
         **kwargs
     ) -> Tuple[Any, float, Dict]:
         """
-        执行Fallback工作流
+        执行Fallback工作流 - 返回错误信息让Qwen学习
 
-        使用最简单但可靠的方式执行
+        重要变更：不再使用外部LLM生成答案，而是返回错误信息
+        这样Qwen模型可以从错误中学习，而不是被掩盖
         """
-        print(f"🔄 执行Fallback工作流")
+        print(f"🔄 Fallback: 返回错误信息供模型学习")
         start_time = time.time()
+        execution_time = time.time() - start_time
 
-        try:
-            # 使用简单的Custom算子
-            if problem_type == "code":
-                func_signature = ", entry_point"
-            else:
-                func_signature = ""
+        # 构建错误描述
+        error_description = f"WORKFLOW_ERROR: {error_info}" if error_info else "WORKFLOW_ERROR: Execution failed"
 
-            simple_workflow_code = f'''
-import asyncio
+        metadata = {
+            "success": False,
+            "fallback_used": True,
+            "error": error_info or "workflow_execution_failed",
+            "execution_time": execution_time,
+            "cost": 0.0,
+            "problem_type": problem_type,
+            "is_error_feedback": True  # 标记这是错误反馈，用于奖励计算
+        }
 
-class Workflow:
-    def __init__(self, name, llm_config, dataset):
-        self.name = name
-        self.dataset = dataset
-        self.llm = create_llm_instance(llm_config)
-        self.custom = operator.Custom(self.llm)
+        print(f"  ⚠️ 返回错误信息: {error_description[:100]}...")
 
-    async def __call__(self, problem{func_signature}):
-        """Simple fallback workflow using only Custom operator"""
-
-        # Use Custom operator with appropriate instruction
-        if self.dataset == "code":
-            instruction = "Solve this coding problem. Provide a complete Python solution."
-        elif self.dataset == "math":
-            instruction = "Solve this math problem step by step. Show your work and provide the final answer."
-        else:
-            instruction = "Answer this question comprehensively."
-
-        result = await self.custom(input=problem, instruction=instruction)
-
-        # Validate and extract response
-        if isinstance(result, dict):
-            response = result.get("response", "")
-        else:
-            response = str(result)
-
-        # Get cost
-        try:
-            cost = self.llm.get_usage_summary().get("total_cost", 0.0)
-        except:
-            cost = 0.0
-
-        return response, cost
-'''
-
-            # 创建工作流类
-            workflow_class = self._create_workflow_class(simple_workflow_code, problem_type)
-
-            # 实例化
-            llm_config = self._get_llm_config()
-            workflow = workflow_class(
-                name="fallback_workflow",
-                llm_config=llm_config,
-                dataset=problem_type
-            )
-
-            # 执行
-            if problem_type == "code" and "entry_point" in kwargs:
-                result = await asyncio.wait_for(
-                    workflow(problem, kwargs["entry_point"]),
-                    timeout=self.timeout
-                )
-            else:
-                result = await asyncio.wait_for(
-                    workflow(problem),
-                    timeout=self.timeout
-                )
-
-            # 解包结果
-            if isinstance(result, tuple) and len(result) >= 2:
-                answer, cost = result[0], result[1]
-            else:
-                answer, cost = result, 0.0
-
-            execution_time = time.time() - start_time
-
-            metadata = {
-                "success": True,
-                "fallback_used": True,
-                "execution_time": execution_time,
-                "cost": cost,
-                "problem_type": problem_type
-            }
-
-            print(f"✅ Fallback成功 (耗时: {execution_time:.2f}秒)")
-            return answer, cost, metadata
-
-        except Exception as e:
-            execution_time = time.time() - start_time
-            print(f"❌ Fallback也失败了: {e}")
-
-            metadata = {
-                "success": False,
-                "fallback_used": True,
-                "error": str(e),
-                "execution_time": execution_time,
-                "cost": 0.0,
-                "problem_type": problem_type
-            }
-
-            # 返回空结果而不是抛出异常
-            return "", 0.0, metadata
+        # 返回错误描述作为答案，让Qwen看到失败原因
+        # 这会导致低奖励，从而让模型学会避免产生有问题的workflow
+        return error_description, 0.0, metadata
 
     def _get_fallback_workflow_class(self, problem_type: str):
         """返回一个简单的默认工作流类（用于生成失败时）

@@ -138,7 +138,10 @@ class GRPOTrainer:
         print("\n📂 初始化数据管理器...")
         self.data_manager = DataManager(
             data_dir=self.config['data_dir'],
-            domain_ratios=self.config['domain_ratios']
+            domain_ratios=self.config['domain_ratios'],
+            train_dataset=self.config.get('train_dataset'),  # P6: 支持配置数据集路径
+            val_dataset=self.config.get('val_dataset'),
+            test_dataset=self.config.get('test_dataset')
         )
         self.data_manager.initialize()
 
@@ -206,7 +209,8 @@ class GRPOTrainer:
                 "base_url": "http://localhost:8002/v1",
                 "api_key": "sk-dummy",
                 "model_name": "/home/yijia/lhy/openai/gpt-oss-120b"
-            }
+            },
+            debug_logging=self.config.get('debug', False)  # P0修复: 传递debug设置
         )
 
         # 9. 优化器
@@ -369,6 +373,19 @@ class GRPOTrainer:
             problem_type = sample['problem_type']
             ground_truth = sample['ground_truth']
 
+            # P0修复: 从meta中获取test_cases和entry_point
+            meta = sample.get('meta', {})
+            test_cases = meta.get('test_cases', sample.get('test', ''))
+            # 优先从meta获取entry_point（HumanEval格式），否则从sample顶层获取
+            entry_point = meta.get('entry_point', sample.get('entry_point', ''))
+
+            # 如果没有entry_point，尝试从test_cases中提取（MBPP格式）
+            if not entry_point and test_cases:
+                import re
+                match = re.search(r'assert\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', test_cases)
+                if match:
+                    entry_point = match.group(1)
+
             # 保存样本元数据（用于后续执行）
             for seq_idx in range(num_sequences):
                 sample_metadata.append({
@@ -377,9 +394,10 @@ class GRPOTrainer:
                     'problem': problem,
                     'ground_truth': ground_truth,
                     'problem_type': problem_type,
-                    'entry_point': sample.get('entry_point', ''),
-                    'test': sample.get('test', ''),
-                    'source': sample.get('source', None)
+                    'entry_point': entry_point,
+                    'test': test_cases,
+                    'source': sample.get('source', None),
+                    'context': sample.get('context', [])  # P1修复: 传递context用于QA数据集
                 })
 
                 # 为每个序列添加输入
@@ -419,14 +437,21 @@ class GRPOTrainer:
             # 计算log概率（旧策略）
             log_prob = await self._compute_log_prob(problem, workflow_code, problem_type)
 
+            # === 日志：打印QWEN生成的完整Workflow代码 ===
+            print(f"\n===== [QWEN] Workflow 代码 S{sample_idx+1}-{seq_idx+1}/{num_sequences} =====\n{workflow_code}\n===== 代码结束 =====", flush=True)
+
             # 执行工作流
+            exec_metadata = {'success': False}
             try:
+                print("  ▶️ 开始使用OSS执行Workflow...", flush=True)
                 answer, cost, exec_metadata = await self.executor.execute_workflow(
                     workflow_code=workflow_code,
                     problem=problem,
                     problem_type=problem_type,
                     entry_point=metadata['entry_point'],
-                    test=metadata['test']
+                    test=metadata['test'],
+                    source=metadata.get('source', ''),
+                    context=metadata.get('context', [])
                 )
 
                 # 计算奖励
@@ -441,6 +466,13 @@ class GRPOTrainer:
                         entry_point=metadata['entry_point'],
                         source=metadata['source']
                     )
+
+                    # 日志：执行与评估详情
+                    print(f"  🧪 执行成功 | cost: {cost:.4f} | 用时: {exec_metadata.get('execution_time', 'NA')}s", flush=True)
+                    print(f"  入口函数: {metadata['entry_point']} | 类型: {problem_type}", flush=True)
+                    print(f"  预测答案: {answer}", flush=True)
+                    print(f"  标准答案: {ground_truth}", flush=True)
+                    print(f"  执行元信息: {exec_metadata}", flush=True)
 
                     correctness = reward
                     is_correct = correctness > 0.5
@@ -510,15 +542,19 @@ class GRPOTrainer:
             # 从all_results中提取属于该样本的结果
             for global_idx in range(total_sequences):
                 result = all_results[global_idx]
+                # P9修复: 正确处理Exception对象
                 if isinstance(result, Exception):
-                    if result.get('sample_idx') == sample_idx:
-                        print(f"  ⚠️  样本{sample_idx+1}-序列{result.get('seq_idx', 'unknown')+1} 异常: {result}")
+                    # Exception对象没有get方法，需要通过global_idx计算sample_idx
+                    result_sample_idx = global_idx // num_sequences
+                    result_seq_idx = global_idx % num_sequences
+                    if result_sample_idx == sample_idx:
+                        print(f"  ⚠️  样本{sample_idx+1}-序列{result_seq_idx+1} 异常: {type(result).__name__}: {str(result)[:100]}")
                         group_workflows.append("")
                         group_answers.append(None)
                         group_rewards.append(-10.0)
                         group_log_probs.append(0.0)
                         group_correctness.append(-10.0)
-                        group_exec_metas.append({'success': False, 'error_type': 'Exception'})
+                        group_exec_metas.append({'success': False, 'error_type': type(result).__name__})
                     continue
 
                 if result['sample_idx'] == sample_idx:
@@ -568,7 +604,8 @@ class GRPOTrainer:
 
         # 整理结果到全局列表
         for sample_idx in range(batch_size):
-            result_sample = all_results[sample_idx * num_sequences]
+            # P9修复: 从batch获取problem，而不是从可能是Exception的result获取
+            current_batch_sample = batch[sample_idx]
             start_idx = sample_idx * num_sequences
             end_idx = start_idx + num_sequences
 
@@ -583,6 +620,9 @@ class GRPOTrainer:
             for idx, (workflow, answer, reward) in enumerate(zip(group_workflows, group_answers, group_rewards)):
                 if reward >= self.experience_buffer.reward_threshold:
                     result = all_results[sample_idx * num_sequences + idx]
+                    # P9修复: 跳过Exception结果
+                    if isinstance(result, Exception):
+                        continue
                     exp_sample = {
                         'problem': result['problem'],
                         'workflow_code': workflow,
@@ -600,7 +640,8 @@ class GRPOTrainer:
 
             # 收集到全局列表（用于策略更新）
             all_workflows.extend(group_workflows)
-            all_problems.extend([result_sample['problem']] * num_sequences)
+            # P9修复: 使用current_batch_sample而不是result_sample
+            all_problems.extend([current_batch_sample['problem']] * num_sequences)
             all_answers.extend(group_answers)
             all_rewards.extend(group_advantages)  # 使用WA-GRPO计算的优势
             all_log_probs.extend(group_log_probs)
@@ -664,6 +705,24 @@ class GRPOTrainer:
                 type_avg = stats['avg_score']
                 # 显示奖励分布
                 print(f"  {ptype}: {type_acc:.1f}% 准确率 | 平均分: {type_avg:.2f} | 样本数: {count}")
+
+        # ✨ 新增：子数据集（source）准确率统计
+        source_stats = {}
+        for score, sample in zip(correctness_scores, [s for s in batch for _ in range(num_sequences)]):
+            source = sample.get('source', 'unknown')
+            if source not in source_stats:
+                source_stats[source] = {'scores': [], 'correct': 0, 'total': 0}
+            source_stats[source]['scores'].append(score)
+            source_stats[source]['total'] += 1
+            if score >= 0.9:
+                source_stats[source]['correct'] += 1
+
+        print(f"\n📈 子数据集准确率:")
+        for source in sorted(source_stats.keys()):
+            stats = source_stats[source]
+            acc = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0.0
+            avg = np.mean(stats['scores']) if stats['scores'] else 0.0
+            print(f"  {source:15s}: {stats['correct']:2d}/{stats['total']:2d} = {acc:5.1f}% | 平均分: {avg:.2f}")
 
         # P0-2统计: 全零优势组计数
         zero_advantage_groups = sum(
@@ -901,13 +960,27 @@ class GRPOTrainer:
             ground_truth = sample['ground_truth']
 
             # 保存样本元数据
+            # P0修复: 从meta中获取test_cases和entry_point
+            meta = sample.get('meta', {})
+            test_cases = meta.get('test_cases', sample.get('test', ''))
+            # 优先从meta获取entry_point（HumanEval格式），否则从sample顶层获取
+            entry_point = meta.get('entry_point', sample.get('entry_point', ''))
+
+            # 如果没有entry_point，尝试从test_cases中提取（MBPP格式）
+            if not entry_point and test_cases:
+                import re
+                match = re.search(r'assert\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', test_cases)
+                if match:
+                    entry_point = match.group(1)
+
             sample_metadata.append({
                 'problem': problem,
                 'ground_truth': ground_truth,
                 'problem_type': problem_type,
-                'entry_point': sample.get('entry_point', ''),
-                'test': sample.get('test', ''),
-                'source': sample.get('source', None)
+                'entry_point': entry_point,
+                'test': test_cases,
+                'source': sample.get('source', None),
+                'context': sample.get('context', [])  # P1修复: 传递context用于QA数据集
             })
 
             # 准备生成输入
@@ -950,7 +1023,9 @@ class GRPOTrainer:
                     problem=problem,
                     problem_type=problem_type,
                     entry_point=metadata['entry_point'],
-                    test=metadata['test']
+                    test=metadata['test'],
+                    source=metadata.get('source', ''),
+                    context=metadata.get('context', [])
                 )
 
                 # 计算正确性
@@ -1105,7 +1180,7 @@ class GRPOTrainer:
             print(f"{'=' * 60}")
 
             # 🛡️ OOM保护: 检查GPU显存，如果不足则等待
-            await self._wait_for_gpu_memory(min_free_gb=45, max_wait_seconds=300)
+            await self._wait_for_gpu_memory(min_free_gb=30, max_wait_seconds=300)
 
             # 训练步骤 (带OOM重试)
             import gc as gc_module

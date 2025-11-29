@@ -29,7 +29,7 @@ lambda_gae: 0.95
 # =====================================
 # Batch配置
 # =====================================
-rollout_batch_size: 6              # 🔥 P0修复: B=6（从8降低，保持总batch=48）
+rollout_batch_size: 10             # 🔥 增大: B=10, K=4 → 每步40样本
 prompt_max_length: 3072
 response_max_length: 5120
 
@@ -59,16 +59,16 @@ gradient_checkpointing: false
 
 # GPU配置
 device_mapping: [0]
-physical_gpus: [4]
+physical_gpus: [3]
 protected_pids: []
 num_gpus: 1
 world_size: 1
 
 # 数据集配置
 data_dir: "data"
-train_dataset: "11/integrated_aflow_roll/data/ready_to_train/train_final_clean.jsonl"
-val_dataset: "11/integrated_aflow_roll/data/ready_to_train/test.jsonl"
-test_dataset: "11/integrated_aflow_roll/data/ready_to_train/test.jsonl"
+train_dataset: "11/integrated_aflow_roll/data/ready_to_train/train_10k_final.jsonl"
+val_dataset: "11/integrated_aflow_roll/data/ready_to_train/test_500_preprocessed.jsonl"
+test_dataset: "11/integrated_aflow_roll/data/ready_to_train/test_500_preprocessed.jsonl"
 
 # 混合采样比例 (2:2:2 均匀分布)
 domain_ratios:
@@ -114,7 +114,7 @@ wandb:
   enabled: true
   project: "agent-prompt"
   entity: "yao110002-sdfsdfsdfsdf-com"
-  api_key: "b42ca0000cf06f97b05eba34f58823ad5f3122a4"
+  api_key: "YOUR_WANDB_API_KEY"  # 请替换为你的wandb api key
   run_name: null
 
 # =====================================
@@ -137,7 +137,7 @@ generation_config:
   do_sample: true
 
 # 调试选项
-debug: false
+debug: true
 verbose: true
 
 # =====================================

@@ -127,24 +127,42 @@ IMPORTANT: First, ANALYZE the problem's difficulty and complexity.
    ✅ await self.test(problem=problem, solution=solution, entry_point=entry_point)
    ✅ await self.review(problem=problem, solution=code)
 
-5️⃣ VARIABLE SCOPE CRITICAL RULE:
-   ⚠️  ALWAYS initialize variables at function start, BEFORE any if/else blocks!
+5️⃣ 🔴🔴🔴 VARIABLE INITIALIZATION - MANDATORY FIRST LINE IN __call__ 🔴🔴🔴
+   THIS IS THE #1 CAUSE OF WORKFLOW FAILURES! READ CAREFULLY!
 
-   ❌ WRONG - UnboundLocalError risk:
-   if condition:
-       result_var = await self.revise(...)  # Only defined in if block
-   return result_var  # ERROR if condition is False!
+   RULE: At the START of __call__, you MUST initialize ALL result variables:
 
-   ✅ CORRECT - Always define first:
-   result_var = initial_value  # Initialize at function start
-   if condition:
-       result_var = await self.revise(...)  # Update if needed
-   return result_var  # Always safe to use
+   async def __call__(self, problem, ...):
+       # ⬇️⬇️⬇️ MANDATORY: Initialize ALL variables FIRST ⬇️⬇️⬇️
+       solution = ""           # For math/qa problems
+       code = ""               # For code problems
+       revised_code = code     # If using Revise operator
+       final_answer = ""       # If storing final result
+       review_result = None    # If using Review operator
+       # ⬆️⬆️⬆️ Add ALL variables you will use BEFORE any logic ⬆️⬆️⬆️
 
-   Common variable names to initialize:
-   - revised_code = code
-   - final_answer = answer
-   - solution = initial_solution
+       # Now your actual logic...
+       result = await self.answer_generate(input=problem)
+       solution = result.get('answer', solution)  # Use initialized default
+
+       if needs_revision:  # This is now SAFE
+           revised = await self.revise(...)
+           revised_code = revised.get('solution', revised_code)  # Safe fallback
+
+       return revised_code, cost  # ALWAYS works, never UnboundLocalError!
+
+   ❌ FATAL ERROR - Will crash:
+   async def __call__(self, problem):
+       if condition:  # If False, revised_code is NEVER defined!
+           revised_code = await self.revise(...)
+       return revised_code  # 💥 UnboundLocalError!
+
+   ✅ CORRECT PATTERN - Always works:
+   async def __call__(self, problem):
+       revised_code = ""  # 👈 INITIALIZE FIRST!
+       if condition:
+           revised_code = await self.revise(...)
+       return revised_code  # ✅ Always defined
 
 {base_template}
 

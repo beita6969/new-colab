@@ -65,8 +65,11 @@ class AnswerExtractor:
 
         # 过滤workflow日志污染
         if "Revised Solution:" in text or "Based on the feedback" in text:
-            clean_text = re.sub(r'Revised Solution:.*?(?=\d)', '', text, flags=re.DOTALL)
-            if clean_text != text:
+            # 清理 "Revised Solution:" 污染
+            clean_text = re.sub(r'Revised Solution:.*?(?=\\boxed|\d|$)', '', text, flags=re.DOTALL)
+            # 清理 "Based on the feedback" 污染
+            clean_text = re.sub(r'Based on the feedback[^\\]*(?=\\boxed|$)', '', clean_text, flags=re.DOTALL)
+            if clean_text.strip():
                 text = clean_text
 
         # 2. 提取\boxed{}（标准LaTeX格式）- 增强检测代码泄漏和错误
@@ -97,8 +100,8 @@ class AnswerExtractor:
             elif boxed.startswith('Error:') or 'Traceback' in boxed or 'SyntaxError' in boxed:
                 # 执行错误，继续尝试其他提取方法
                 boxed = None
-            # 检测无效输出
-            elif boxed.startswith('Based on the feedback') or boxed.startswith('Revised Solution'):
+            # 检测无效输出 - 使用 'in' 而不是 startswith 来捕获更多情况
+            elif 'Based on the feedback' in boxed or 'Revised Solution' in boxed:
                 # 无效输出，跳过
                 boxed = None
             else:
@@ -156,8 +159,18 @@ class AnswerExtractor:
             if numbers:
                 return str(numbers[-1])
 
-        # 最后兜底：整个文本
-        return text
+        # 最后兜底：检查是否有污染内容，如果有则返回空字符串
+        # 避免返回包含 "Based on the feedback" 或代码块的污染文本
+        if 'Based on the feedback' in text or 'Revised Solution' in text or '```python' in text:
+            return ""
+        # 否则返回清理后的文本（仅保留数字和基本符号）
+        cleaned = re.sub(r'[^\d\-+./]', ' ', text).strip()
+        if cleaned:
+            # 尝试提取最后一个数字
+            nums = re.findall(r'-?\d+\.?\d*', cleaned)
+            if nums:
+                return nums[-1]
+        return ""
 
     def _extract_code_answer(self, text: str, is_ground_truth: bool) -> str:
         """
@@ -175,8 +188,13 @@ class AnswerExtractor:
         """
         text = str(text).strip()
 
-        # 1. 提取代码块
-        code_blocks = re.findall(r'```(?:python)?\n?([^`]+)```', text)
+        # P0修复: 清理空代码块和无效占位符
+        text = re.sub(r'```python\s*```', '', text)  # 清理空块
+        text = re.sub(r'```\s*```', '', text)
+        text = text.replace('No code provided', '').replace('No code', '')
+
+        # 1. 提取代码块 (P1修复: 换行符可选)
+        code_blocks = re.findall(r'```(?:python)?\s*\n?([^`]+)```', text)
         if code_blocks:
             # 尝试从后往前找第一个语法正确的代码块
             for block in reversed(code_blocks):

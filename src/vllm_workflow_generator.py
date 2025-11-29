@@ -108,92 +108,106 @@ class VLLMWorkflowGenerator:
         }
 
     def _build_generation_prompt(self, problem: str, problem_type: str) -> str:
-        """构建生成提示词"""
-        prompt = f"""Generate a Python Workflow class to solve the given problem.
+        """构建生成提示词 - 自由探索算子组合 + TASK_PROMPT优化"""
+        prompt = f"""Generate a Python Workflow to solve the given problem.
 
-IMPORTANT: Consider the problem's difficulty and complexity when designing your workflow.
-- Simple problems may only need one operator
-- Complex problems may benefit from review loops or multiple attempts
+## YOUR GOAL: Design the best workflow by COMBINING operators freely!
+- **COMBINE** 1-7 operators in creative ways (not just pick one!)
+- Design effective TASK_PROMPT to guide the execution LLM
+- The TASK_PROMPT will be automatically injected into the problem input
+- Think: What combination of operators would solve this problem best?
 
-CRITICAL RULES:
-- Only use operators listed below with their EXACT parameters
-- Initialize ALL operators in __init__ before using them in __call__
-- Never return undefined variables
-- Design your workflow freely - you decide which operators to use and how to combine them
+## TASK_PROMPT (Required)
+Define a TASK_PROMPT that guides the LLM. This prompt will be prepended to the problem.
+Good prompts include:
+- Problem-solving strategies
+- Step-by-step instructions
+- Format requirements (e.g., \\boxed{{}} for math answers)
+- Domain-specific hints
 
-Available Operators:
+## Available Operators (COMBINE freely - use 1 or more together!):
 
-1. Custom(llm) - Most flexible, for any custom task
+1. **Custom(llm)** - Execute with YOUR custom instruction
    Call: await self.custom(input=str, instruction=str)
    Returns: {{'response': str}}
 
-2. AnswerGenerate(llm) - Step-by-step reasoning
+2. **AnswerGenerate(llm)** - Step-by-step reasoning
    Call: await self.answer_generate(input=str)
    Returns: {{'thought': str, 'answer': str}}
 
-3. Programmer(llm) - Auto-generate and execute Python code
+3. **Programmer(llm)** - Generate and execute Python code
    Call: await self.programmer(problem=str, analysis=str)
    Returns: {{'code': str, 'output': str}}
+   **IMPORTANT**: Use 'output' (execution result) NOT 'code' for the answer!
+   Example: result = await self.programmer(problem=p); answer = result['output']  # NOT result['code']!
 
-4. Test(llm) - Test code with test cases
-   Call: await self.test(problem=str, solution=str, entry_point=str)
-   Returns: {{'result': bool, 'solution': str}}
-
-5. Review(llm) - Review and validate solution
+4. **Review(llm)** - Review solution
    Call: await self.review(problem=str, solution=str)
    Returns: {{'review_result': bool, 'feedback': str}}
 
-6. Revise(llm) - Revise solution based on feedback
+5. **Revise(llm)** - Revise based on feedback
    Call: await self.revise(problem=str, solution=str, feedback=str)
    Returns: {{'solution': str}}
 
-7. ScEnsemble(llm) - Self-consistency ensemble voting
+6. **ScEnsemble(llm)** - Ensemble voting
    Call: await self.sc_ensemble(solutions=list, problem=str)
    Returns: {{'response': str}}
 
-Template:
+7. **Test(llm)** - Generate and run test cases for code
+   Call: await self.test(problem=str, solution=str, entry_point=str)
+   Returns: {{'result': bool, 'solution': str}}
+   **IMPORTANT**: For code problems, entry_point is provided as __call__ parameter!
 
-import workspace.{problem_type}.workflows.template.operator as operator
-from scripts.async_llm import create_llm_instance
-from scripts.evaluator import DatasetType
+## OUTPUT FORMAT:
+
+```python
+# === PROMPT_CUSTOM START ===
+TASK_PROMPT = \"\"\"Your task-specific prompt here...\"\"\"
+# === PROMPT_CUSTOM END ===
 
 class Workflow:
     def __init__(self, name: str, llm_config, dataset: DatasetType):
         self.name = name
-        self.dataset = dataset
         self.llm = create_llm_instance(llm_config)
+        # Initialize any operators you need
+        self.answer_generate = operator.AnswerGenerate(self.llm)
+        self.programmer = operator.Programmer(self.llm)  # For math calculations
+        # ... add more operators as needed
 
-        # Initialize operators you need (examples):
-        # self.answer_generate = operator.AnswerGenerate(self.llm)
-        # self.review = operator.Review(self.llm)
-        # self.revise = operator.Revise(self.llm)
-        # self.programmer = operator.Programmer(self.llm)
-        # self.test = operator.Test(self.llm)
-        # self.custom = operator.Custom(self.llm)
-        # self.sc_ensemble = operator.ScEnsemble(self.llm)
+    # For code problems: async def __call__(self, problem: str, entry_point: str = "solve"):
+    # For math/qa problems: async def __call__(self, problem: str):
+    async def __call__(self, problem: str, entry_point: str = "solve"):
+        # Your workflow logic - use any operators
+        # For code: use entry_point parameter when calling test()
+        solution = await self.answer_generate(input=problem)
+        return solution['answer'], self.llm.get_usage_summary()["total_cost"]
+```
 
-    async def __call__(self, problem: str):
-        # Solve: {problem}
-        # MUST return (solution, cost) tuple
-        # Example patterns:
-        #
-        # Pattern 1 - Simple:
-        # solution = await self.answer_generate(input=problem)
-        # return solution['answer'], self.llm.get_usage_summary()["total_cost"]
-        #
-        # Pattern 2 - Review+Revise loop:
-        # solution = await self.answer_generate(input=problem)
-        # review = await self.review(problem=problem, solution=solution['answer'])
-        # if not review['review_result']:
-        #     revised = await self.revise(problem=problem, solution=solution['answer'], feedback=review['feedback'])
-        #     return revised['solution'], self.llm.get_usage_summary()["total_cost"]
-        # return solution['answer'], self.llm.get_usage_summary()["total_cost"]
-        #
-        # Pattern 3 - Code with test:
-        # code_result = await self.programmer(problem=problem, analysis='')
-        # test_result = await self.test(problem=problem, solution=code_result['code'], entry_point='solution')
-        # return test_result['solution'], self.llm.get_usage_summary()["total_cost"]
-        pass
+## IMPORTANT: Programmer Usage for Math
+**⚠️ CRITICAL WARNING**: When using Programmer for math calculations:
+```python
+# CORRECT: Use 'output' which contains the execution result
+result = await self.programmer(problem=problem, analysis="Calculate")
+final_answer = result['output']  # This is the computed answer!
+return "\\boxed{" + str(final_answer) + "}", cost
+
+# ❌ WRONG: Do NOT use 'code' - it's just the source code, not the result!
+# answer = result['code']  # This would return Python code, not the answer!
+```
+**RULE**: When returning from Programmer, ALWAYS use result['output'], NEVER result['code'].
+
+## DESIGN FREELY:
+- Use 1 operator OR combine multiple operators
+- Create iterative loops (while/for) if needed
+- Chain outputs as inputs to next operators
+- Design conditional logic based on review results
+
+---
+
+Problem to solve: {problem}
+Problem type: {problem_type}
+
+Generate your PROMPT_CUSTOM and Workflow class:
 """
         return prompt
 
@@ -340,7 +354,9 @@ class Workflow:
                 }
 
     def _parse_workflow_code(self, generated_text: str, problem_type: str) -> Tuple[str, bool, Optional[str]]:
-        """解析生成的文本，提取并验证工作流代码"""
+        """解析生成的文本，提取并验证工作流代码（支持prompt_custom）"""
+        import re
+
         # 提取代码块
         code_start = generated_text.find("```python")
         if code_start == -1:
@@ -354,6 +370,74 @@ class Workflow:
             code = generated_text[code_start:code_end] if code_end != -1 else generated_text[code_start:]
 
         code = code.strip()
+
+        # 🔧 解析并提取prompt_custom部分
+        # 检查是否包含PROMPT_CUSTOM标记
+        prompt_custom_start = code.find("# === PROMPT_CUSTOM START ===")
+        prompt_custom_end = code.find("# === PROMPT_CUSTOM END ===")
+
+        prompt_custom_code = ""
+        if prompt_custom_start != -1 and prompt_custom_end != -1:
+            # 提取prompt_custom部分（包含结束标记行）
+            end_line_end = code.find("\n", prompt_custom_end)
+            if end_line_end == -1:
+                end_line_end = len(code)
+            prompt_custom_code = code[prompt_custom_start:end_line_end + 1]
+            print(f"  📝 检测到PROMPT_CUSTOM定义")
+        else:
+            # 没有标记，尝试检测TASK_PROMPT等变量定义
+            task_prompt_match = re.search(r'^(TASK_PROMPT\s*=\s*["\'\"\"\"].*?["\'\"\"]\s*$)', code, re.MULTILINE | re.DOTALL)
+            if task_prompt_match:
+                # 提取所有顶级的PROMPT变量定义
+                prompt_patterns = re.findall(
+                    r'^([A-Z_]+_PROMPT\s*=\s*(?:["\'\"\"\"].*?["\'\"\"]|f["\'\"\"\"].*?["\'\"\"])\s*)$',
+                    code,
+                    re.MULTILINE | re.DOTALL
+                )
+                if prompt_patterns:
+                    prompt_custom_code = "\n".join(prompt_patterns)
+                    print(f"  📝 检测到 {len(prompt_patterns)} 个PROMPT变量定义")
+
+        # 如果没有prompt_custom，创建一个默认的
+        if not prompt_custom_code:
+            # 为不同问题类型创建合适的默认prompt
+            if problem_type == "math":
+                prompt_custom_code = '''TASK_PROMPT = """Solve this mathematical problem step by step.
+Show your reasoning clearly and provide the final numerical answer.
+Format: First explain your approach, then show calculations, finally state the answer."""
+'''
+            elif problem_type == "code":
+                prompt_custom_code = '''TASK_PROMPT = """Write a Python function to solve this problem.
+Requirements:
+1. The function should be efficient and handle edge cases
+2. Include proper input validation
+3. Return the correct type as specified"""
+'''
+            else:
+                prompt_custom_code = '''TASK_PROMPT = """Solve this problem carefully.
+Provide a clear, structured answer with reasoning."""
+'''
+            print(f"  📝 使用默认PROMPT_CUSTOM (问题类型: {problem_type})")
+
+        # 确保prompt_custom代码在Workflow类之前
+        # 移除原始位置的prompt_custom，然后添加到开头
+        if prompt_custom_start != -1 and prompt_custom_end != -1:
+            end_line_end = code.find("\n", prompt_custom_end)
+            if end_line_end == -1:
+                end_line_end = len(code)
+            code = code[:prompt_custom_start] + code[end_line_end + 1:]
+
+        # 在import语句之前添加prompt_custom
+        import_match = re.search(r'^import |^from ', code, re.MULTILINE)
+        if import_match:
+            code = prompt_custom_code + "\n" + code
+        else:
+            # 如果没有import，在class之前添加
+            class_match = re.search(r'^class Workflow', code, re.MULTILINE)
+            if class_match:
+                code = prompt_custom_code + "\n" + code[:class_match.start()] + code[class_match.start():]
+            else:
+                code = prompt_custom_code + "\n" + code
 
         # ⚠️ Auto-Fix：自动修复缺失的operator初始化
         code = self._validate_and_fix_workflow(code, problem_type)
@@ -439,8 +523,35 @@ class Workflow:
         return code
 
     def _get_default_workflow(self, problem_type: str = "math") -> str:
-        """默认工作流"""
-        return f"""import workspace.{problem_type}.workflows.template.operator as operator
+        """默认工作流 - 包含TASK_PROMPT"""
+        # 根据问题类型选择合适的默认prompt
+        if problem_type == "math":
+            task_prompt = '''"""Solve this mathematical problem step by step.
+Show your complete reasoning process:
+1. Identify what the problem is asking
+2. List known information and variables
+3. Apply relevant formulas or methods
+4. Perform calculations carefully
+5. State the final numerical answer clearly
+
+IMPORTANT: Always verify your answer before providing it."""'''
+        elif problem_type == "code":
+            task_prompt = '''"""Write a Python function to solve this problem.
+Requirements:
+1. Handle all edge cases properly
+2. Use efficient algorithms
+3. Include proper input validation
+4. Return the correct type as specified
+5. Add brief comments for complex logic"""'''
+        else:
+            task_prompt = '''"""Solve this problem carefully and provide a clear answer.
+Show your reasoning step by step."""'''
+
+        return f"""# === PROMPT_CUSTOM START ===
+TASK_PROMPT = {task_prompt}
+# === PROMPT_CUSTOM END ===
+
+import workspace.{problem_type}.workflows.template.operator as operator
 from scripts.async_llm import create_llm_instance
 from scripts.evaluator import DatasetType
 
@@ -451,8 +562,9 @@ class Workflow:
         self.llm = create_llm_instance(llm_config)
         self.custom = operator.Custom(self.llm)
 
-    async def __call__(self, problem: str):
-        solution = await self.custom(input=problem, instruction="Solve this problem step by step.")
+    async def __call__(self, problem: str, entry_point: str = "solve"):
+        # entry_point used for code problems with Test operator
+        solution = await self.custom(input=problem, instruction=TASK_PROMPT)
         return solution['response'], self.llm.get_usage_summary()["total_cost"]
 """
 
@@ -515,35 +627,29 @@ class Workflow:
         temperatures: List[float],
         custom_prompts: Optional[List[str]]
     ) -> List[Dict]:
-        """使用transformers批量生成（GPU batch推理）"""
+        """使用transformers批量生成（GPU batch推理，支持分批以降低显存）"""
         loop = asyncio.get_event_loop()
 
-        def _sync_batch_generate():
-            """同步批量生成函数"""
-            # 构建所有prompts
-            prompts = []
-            for i in range(len(problems)):
-                if custom_prompts and custom_prompts[i]:
-                    prompt = custom_prompts[i]
-                else:
-                    prompt = self._build_generation_prompt(problems[i], problem_types[i])
-                prompts.append(prompt)
+        # 🔧 显存优化：分批生成，每批最多8个序列
+        MAX_BATCH_SIZE = 8  # 每批最多8个，降低显存峰值
 
+        def _sync_batch_generate(batch_prompts, batch_temp):
+            """同步批量生成函数（单批）"""
             # 批量tokenize（关键：padding对齐）
             inputs = self.tokenizer(
-                prompts,
+                batch_prompts,
                 return_tensors="pt",
                 padding=True,  # 对齐到最长序列
                 truncation=True,
                 max_length=3072
             ).to(self.device)
 
-            # 批量生成（6个prompt一起在GPU上并行）
+            # 批量生成
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.config.get('max_new_tokens', 2048),
-                    temperature=temperatures[0],  # 假设temperature相同
+                    temperature=batch_temp,
                     top_p=self.config.get('top_p', 0.95),
                     top_k=self.config.get('top_k', 50),
                     do_sample=True,
@@ -556,15 +662,40 @@ class Workflow:
                 skip_special_tokens=True
             )
 
+            # 🔧 显存优化：及时清理
+            del inputs, outputs
+            torch.cuda.empty_cache()
+
             return generated_texts
 
         try:
-            # 在线程池执行批量推理
-            generated_texts = await loop.run_in_executor(None, _sync_batch_generate)
+            # 构建所有prompts
+            all_prompts = []
+            for i in range(len(problems)):
+                if custom_prompts and custom_prompts[i]:
+                    prompt = custom_prompts[i]
+                else:
+                    prompt = self._build_generation_prompt(problems[i], problem_types[i])
+                all_prompts.append(prompt)
+
+            # 🔧 分批处理以降低显存峰值
+            all_generated_texts = []
+            for batch_start in range(0, len(all_prompts), MAX_BATCH_SIZE):
+                batch_end = min(batch_start + MAX_BATCH_SIZE, len(all_prompts))
+                batch_prompts = all_prompts[batch_start:batch_end]
+                batch_temp = temperatures[batch_start]  # 假设同批temperature相同
+
+                print(f"  🔧 生成批次 {batch_start//MAX_BATCH_SIZE + 1}/{(len(all_prompts)-1)//MAX_BATCH_SIZE + 1} ({len(batch_prompts)}个序列)")
+
+                # 在线程池执行单批推理
+                batch_texts = await loop.run_in_executor(
+                    None, _sync_batch_generate, batch_prompts, batch_temp
+                )
+                all_generated_texts.extend(batch_texts)
 
             # 解析所有结果
             results = []
-            for i, generated_text in enumerate(generated_texts):
+            for i, generated_text in enumerate(all_generated_texts):
                 workflow_code, is_valid, error = self._parse_workflow_code(
                     generated_text, problem_types[i]
                 )

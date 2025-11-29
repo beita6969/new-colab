@@ -109,8 +109,21 @@ class OperatorPromptEnhancer:
 
         original_input = kwargs['input']
 
-        # 为gpt-oss-120b添加推理指导
-        hint = "[For gpt-oss-120b: Provide step-by-step reasoning]\n\n"
+        # 根据问题类型选择不同的增强
+        if problem_type == "qa":
+            # QA需要强调简洁精确的答案
+            hint = """[CRITICAL: QA Answer Requirements]
+- Your 'answer' field MUST be SHORT and PRECISE (1-5 words typically)
+- Do NOT include explanations in the 'answer' field
+- Put reasoning in 'thought' field only
+- Answer should be a direct response (name, number, yes/no, etc.)
+- Example: If asked "Who wrote Romeo and Juliet?", answer should be "William Shakespeare" NOT a long explanation
+
+"""
+        else:
+            # Math和其他类型保持原来的增强
+            hint = "[For gpt-oss-120b: Provide step-by-step reasoning]\n\n"
+
         kwargs['input'] = f"{hint}{original_input}"
 
         return kwargs
