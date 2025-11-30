@@ -79,6 +79,23 @@ class AnswerExtractor:
             if not boxed or boxed.strip() == '':
                 # 空输出，继续尝试其他提取方法
                 boxed = None
+            # 🔧 P0-FIX: 检测代码泄漏（最重要的检查）
+            # 如果boxed中包含def/return/import等关键字，说明错误地将代码作为答案
+            elif any(keyword in boxed for keyword in ['def ', 'return ', 'import ', 'class ', 'if __name__', 'print(', 'for ', 'while ', 'elif ', ':\n', 'await ', 'async ']):
+                # 🔧 代码泄漏！尝试执行代码获取真实答案
+                print(f"  ⚠️ 检测到代码泄漏在\\boxed{{}}中，尝试执行...")
+                executed_answer = self._execute_code_and_extract_answer(boxed, 'math')
+                if executed_answer:
+                    print(f"  ✅ 执行成功，提取答案: {executed_answer}")
+                    return executed_answer
+                # 执行失败，尝试静态分析
+                code_answer = self._extract_answer_from_code_block(boxed)
+                if code_answer and not any(kw in str(code_answer) for kw in ['def ', 'import ', 'class ']):
+                    print(f"  ✅ 静态分析提取答案: {code_answer}")
+                    return self._clean_math_answer(code_answer)
+                # 无法提取有效答案，返回空（不要返回代码！）
+                print(f"  ❌ 无法从代码中提取答案，返回空")
+                boxed = None
             # 检测代码块标记：如果包含```python或```，说明是代码块而非答案
             elif '```python' in boxed or boxed.startswith('```'):
                 # 策略1：尝试执行代码获取答案（仅对math问题）
@@ -91,10 +108,6 @@ class AnswerExtractor:
                 if code_answer:
                     return code_answer
                 # 无法提取，跳过
-                boxed = None
-            # 检测代码泄漏：如果boxed中包含def/return/import等关键字，跳过
-            elif any(keyword in boxed for keyword in ['def ', 'return ', 'import ', 'class ', 'if __name__']):
-                # 代码泄漏，继续尝试其他提取方法
                 boxed = None
             # 检测执行错误：如果是Error信息，跳过
             elif boxed.startswith('Error:') or 'Traceback' in boxed or 'SyntaxError' in boxed:

@@ -137,10 +137,19 @@ Good prompts include:
 
 3. **Programmer(llm)** - Generate and execute Python code, returns EXECUTION RESULT
    Call: await self.programmer(problem=str, analysis=str)
-   Returns: {{'code': str (source code - NEVER use this as answer!), 'output': str (EXECUTION RESULT - ALWAYS use this!)}}
-   ⚠️ CRITICAL: result['output'] = computed answer (e.g., "42"), result['code'] = source code (e.g., "def solve(): return 42")
-   ✅ CORRECT: answer = result['output']  # Gets "42"
-   ❌ WRONG: answer = result['code']  # Gets "def solve(): return 42" - THIS IS A BUG!
+   Returns: {{'code': str (source code - NEVER USE AS ANSWER!), 'output': str (EXECUTION RESULT - ALWAYS USE!)}}
+
+   🚨🚨🚨 MOST COMMON BUG - READ 3 TIMES 🚨🚨🚨
+   result['output'] = THE COMPUTED ANSWER (e.g., "42", "3.14", "hello world")
+   result['code'] = Python source code (e.g., "def solve(): return 42") - THIS IS NOT THE ANSWER!
+
+   ✅✅✅ ALWAYS DO THIS:
+   answer = result['output']  # Gets the ANSWER: "42"
+   return f"\\boxed{{{{{{answer}}}}}}", cost  # Returns \\boxed{{42}} ✓
+
+   ❌❌❌ NEVER DO THIS:
+   answer = result['code']  # Gets SOURCE CODE: "def solve()..." - BUG!
+   return f"\\boxed{{{{{{answer}}}}}}", cost  # Returns \\boxed{{def solve...}} - WRONG!
 
 4. **Review(llm)** - Review solution
    Call: await self.review(problem=str, solution=str)

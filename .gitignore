@@ -4,100 +4,99 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.eggs/
 
-# Virtual Environment
-venv/
-ENV/
-env/
-
-# Training outputs
-checkpoints/
-checkpoints_qwen3/
+# 日志和运行时
 logs/
-logs_qwen3/
-*.log
 wandb/
-*.pt
-*.pth
-*.bin
-*.safetensors
+*.log
+checkpoints/
 
-# API Keys and Secrets (IMPORTANT!)
-config/**/aflow_llm*.yaml
-**/aflow_llm*.yaml
-**/api_key*.txt
-**/*token*.txt
-.env
-*.key
-backup*/
-
-# Data files to exclude (keep only training data)
-data/datasets/
-data/experience_buffer/
-data/raw/
-data/raw_filtered/
-data/processed/
-data/mixed/
-data/final_mix/
-data/agentflow/
-data/gsm8k/
-data/math/
-data/humaneval/
-data/mbpp/
-data/hotpotqa/
-data/drop/
-*.backup
-tester.txt
-data.csv
+# 临时分析文件
+*.txt
+*.csv
 output.json
+sample_output.json
+tester.txt
+
+# 备份文件
+*.backup*
+*_backup*
+*_broken*
+backup_*/
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
-*~
-.DS_Store
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+# 测试缓存
+.pytest_cache/
 
-# Temporary files
-*.tmp
-*.bak
-*.orig
-nohup.out
+# 不需要的临时markdown分析
+AFLOW_EXECUTOR_FIXES.py
+ANALYSIS_SUMMARY.*
+BUG_REPORT.md
+DEEP_INVESTIGATION.md
+ERROR_ANALYSIS_INDEX.md
+ERROR_ANALYSIS_REPORT.md
+ERROR_EXAMPLES.md
+EXECUTION_SUMMARY.md
+PROJECT_SUMMARY.md
+QUICK_FIX_GUIDE.md
+QUICK_REFERENCE.md
+QUICKSTART_*.md
+README_ERROR_ANALYSIS.md
+ROOT_CAUSE_ANALYSIS.txt
+WORKFLOW_ANALYSIS.md
+analysis_report.md
+fixes_implementation.md
+fix_recommendations.md
+prompt_flow_analysis.md
+MEMORY_FIX_PLAN.md
+DATA_QUALITY_REPORT.md
+data_cleaning_guide.py
+fix_memory_leak.py
+test_programmer_fix.py
+test_prompt_custom.py
 
-# Model downloads (large files)
-models/
-*.onnx
-*.tflite
+# 冗余数据
+data/ready_to_train/train_10k.jsonl
+data/ready_to_train/train_10k_preprocessed.jsonl
+data/ready_to_train/train.jsonl
+data/ready_to_train/train_clean_llm.jsonl
+data/ready_to_train/train_final_clean.jsonl
+data/ready_to_train/train_llm_cleaned.jsonl
+data/ready_to_train/test.jsonl
+data/ready_to_train/test_500.jsonl
+data/ready_to_train/bad_samples.jsonl
+data/ready_to_train/dropped_samples.jsonl
+data/ready_to_train/data_preprocessing.py
+data/ready_to_train/*.md
 
-# Archive and backup directories
-archive/
-clean_version/
-github_ready_version/
+# 冗余配置
+config/*.backup*
+config/training_*.yaml
+!config/training.yaml
+config/aflow_llm_qwen3.yaml
+config/aflow_llm.yaml.example
 
-# Checkpoints directory (models)
-checkpoints
-checkpoints/
+# 冗余src文件
+src/grpo_trainer_batch_v1.py
+src/grpo_trainer_current_broken.py
+src/prompt_optimizer.py.backup_v1
+src/rl_workflow_generator.py
+src/grpo_dar.py
 
-# Chinese named files
-*数据集*.md
-*训练*.md
+# 其他目录
+11/
+evaluation_cases/
+download_*.log
+vllm_*.log
+compare_training.sh
+
+# 中文文档
+数据集质量分析报告.md
+训练效果深度分析.md

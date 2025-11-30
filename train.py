@@ -7,6 +7,13 @@ import os
 import asyncio
 import argparse
 
+# P12修复: 禁用代理，确保LLM Judge可以直连localhost:8002
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ['no_proxy'] = 'localhost,127.0.0.1'
+
 # 添加src到路径
 sys.path.insert(0, 'src')
 

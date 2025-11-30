@@ -1,10 +1,10 @@
 # AFlow + ROLL 集成训练配置
-# 🔥 K=4, B=6, T=0.1 P0修复配置
-# 修改时间: 2024-11-25
-# 配置理念: K=4提升稳定性，T=0.1最优温度(实验证明)，总batch=48不变
+# 🔥 P13修复: K=2, B=5 降低并发减少超时
+# 修改时间: 2024-11-30
+# 配置理念: 降低并发避免vLLM排队超时，LLM提取做主力
 
 # 实验配置
-exp_name: "aflow_grpo_k4_b6_temp01_p0fix"  # K=4 + T=0.1 + P0修复
+exp_name: "aflow_grpo_k2_b5_p13fix"  # P13: K=2, B=5, LLM提取主力
 output_dir: "checkpoints"
 log_dir: "logs"
 max_steps: 500
@@ -17,7 +17,7 @@ log_every: 5
 # GRPO算法配置（基于智能体分析优化）
 # =====================================
 adv_estimator: "grpo"
-num_return_sequences_in_group: 4   # K=4（稳定性验证）
+num_return_sequences_in_group: 2   # 🔥 P13修复: K=2 减少并发(原K=4导致超时55%)
 ppo_epochs: 1
 async_generation_ratio: 0
 use_kl_loss: true
@@ -29,7 +29,7 @@ lambda_gae: 0.95
 # =====================================
 # Batch配置
 # =====================================
-rollout_batch_size: 10             # 🔥 增大: B=10, K=4 → 每步40样本
+rollout_batch_size: 5              # 🔥 P13修复: B=5 减少并发(原B=10), 每步10样本
 prompt_max_length: 3072
 response_max_length: 5120
 
@@ -52,10 +52,10 @@ lora_dropout: 0.05
 learning_rate: 2.0e-5              # 🔥 P1修复: 提高4倍增强学习信号(原5e-6太低导致KL=1e-8)
 weight_decay: 0.01
 max_grad_norm: 1.0                 # 🔥 P1修复: 从0.5提升到1.0，允许更大梯度
-gradient_accumulation_steps: 2     # 有效batch=48样本
+gradient_accumulation_steps: 4     # 🔧 OOM修复: 增加到4，减少显存峰值
 warmup_steps: 100                  # 🔥 P1修复: 从50增加到100（20%训练步数）
 bf16: true
-gradient_checkpointing: false
+gradient_checkpointing: true       # 🔧 OOM修复: 启用梯度检查点
 
 # GPU配置
 device_mapping: [0]

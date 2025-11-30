@@ -64,10 +64,14 @@ class PromptOptimizer:
                 few_shot_section = self._format_few_shot_examples(few_shot_examples)
 
         # 3. 类型自适应指导
+        # 🔧 FIX: 确保正确路由problem_type，不要让Code任务使用Math/QA的\boxed{}格式
         type_guidance_section = self.type_guidance.get(
             problem_type,
-            self.type_guidance["qa"]  # 默认使用QA指导
+            ""  # 默认使用空字符串，避免错误路由
         )
+        # 如果问题类型不在预定义中，使用通用指导
+        if not type_guidance_section and problem_type not in self.type_guidance:
+            type_guidance_section = f"""✅ {problem_type.upper()} Problem: Provide accurate solution based on problem requirements."""
 
         # 4. 根据问题类型确定workflow签名
         if problem_type == "code":
@@ -245,9 +249,9 @@ class Workflow:
             "Programmer": {
                 "description": "Auto-generate and execute Python code. Essential for CODE problems and calculation-heavy tasks.",
                 "interface": "Programmer(problem: str, analysis: str)",
-                "returns": "{'code': str, 'output': str}",
-                "example_call": "prog_result = await self.programmer(problem=problem, analysis='Analyze and solve')\ncode = prog_result.get('code', '')  # Extract code string from dict",
-                "note": "Returns dict with 'code' key - must extract before passing to Test"
+                "returns": "{'code': str (SOURCE CODE - for Code problems only), 'output': str (EXECUTION RESULT - ALWAYS USE for Math/QA!)}",
+                "example_call": "prog_result = await self.programmer(problem=problem, analysis='Analyze and solve')\n# ⚠️ CRITICAL: Use 'output' for MATH/QA answer, NOT 'code'!\nexecuted_answer = prog_result.get('output', '')  # THE COMPUTED RESULT: '42', '3.14'\n# Only use 'code' for Code problems where you need source code",
+                "note": "Returns 'output' (execution result) and 'code' (source). For MATH/QA: ALWAYS use output! For CODE: use code."
             },
             "ScEnsemble": {
                 "description": "Self-consistency ensemble. Use for complex reasoning where single attempt is unreliable.",
@@ -291,12 +295,25 @@ class Workflow:
             "math": """
 ✅ MATH Problem Requirements:
 - Return final answer in \\boxed{} notation
-- STRATEGY: 
+- STRATEGY:
   * For standard calculations -> Use Programmer
   * For logical reasoning -> Use AnswerGenerate
   * For complex/ambiguous problems -> Use Review/Revise
 - IMPORTANT: If using Test operator, MUST call with ALL parameters:
     result = await self.test(problem=problem, solution=solution, entry_point="solve")
+
+📝 RECOMMENDED PATTERN (for complex problems):
+1. Initial solution
+   ans = await self.answer_generate(input=problem)
+   solution = ans.get('answer', '')
+2. Review once
+   review = await self.review(problem=problem, solution=solution)
+   feedback = review.get('feedback', review.get('review_result', ''))
+3. If feedback indicates error -> Revise once
+   if feedback:
+       revised = await self.revise(problem=problem, solution=solution, feedback=feedback)
+       solution = revised.get('solution', solution)
+4. Return final answer in \\boxed{<answer>} format (string)
 """,
             "code": """
 🚨🚨🚨 CRITICAL - CODE WORKFLOW SIGNATURE 🚨🚨🚨
@@ -379,6 +396,19 @@ async def __call__(self, problem: str, entry_point: str, test: str):
 - If using Test operator with custom test, MUST call with ALL parameters:
     result = await self.test(problem=problem, solution=answer, entry_point="execute")
 - Choose operators based on problem complexity
+
+📝 RECOMMENDED PATTERN (for complex questions):
+1. Initial answer
+   ans = await self.answer_generate(input=problem)
+   answer = ans.get('answer', '')
+2. Review once
+   review = await self.review(problem=problem, solution=answer)
+   feedback = review.get('feedback', review.get('review_result', ''))
+3. If feedback indicates correction -> Revise once
+   if feedback:
+       revised = await self.revise(problem=problem, solution=answer, feedback=feedback)
+       answer = revised.get('solution', answer)
+4. Return concise final answer (string only, no code, no \\boxed{})
 """
         }
 

@@ -2,6 +2,16 @@
 """
 GRPO训练器 - 在线学习模式的强化学习训练器
 """
+import os
+
+# P12修复: 禁用代理，确保LLM Judge可以直连localhost:8002
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ['no_proxy'] = 'localhost,127.0.0.1'
+
+import gc
 import torch
 import torch.nn.functional as F
 import asyncio
@@ -255,7 +265,7 @@ class GRPOTrainer:
         print(f"  最小优势标准差: {self.advantage_computer.min_advantage_std}")
 
     def _load_rl_model(self):
-        """加载RL模型（Qwen2.5-7B + LoRA）"""
+        """加载RL模型（Qwen2.5-7B + LoRA）- 内存优化版"""
         device = f"cuda:{self.config['device_mapping'][0]}"
 
         # 加载tokenizer
@@ -273,6 +283,11 @@ class GRPOTrainer:
             device_map={"": device},
             trust_remote_code=True
         )
+
+        # 🔧 OOM修复: 启用梯度检查点
+        if self.config.get('gradient_checkpointing', False):
+            self.model.gradient_checkpointing_enable()
+            print("✅ 梯度检查点已启用 (节省显存)")
 
         # 应用LoRA
         if self.config.get('use_lora', True):
@@ -724,15 +739,51 @@ class GRPOTrainer:
             avg = np.mean(stats['scores']) if stats['scores'] else 0.0
             print(f"  {source:15s}: {stats['correct']:2d}/{stats['total']:2d} = {acc:5.1f}% | 平均分: {avg:.2f}")
 
-        # P0-2统计: 全零优势组计数
-        zero_advantage_groups = sum(
-            1 for i in range(0, len(all_rewards), num_sequences)
-            if abs(sum(all_rewards[i:i+num_sequences])) < 1e-6
-        )
-        print(f"\n🔧 GRPO诊断:")
-        print(f"  全零优势组: {zero_advantage_groups}/{batch_size} ({zero_advantage_groups/batch_size*100:.1f}%)")
-        print(f"  优势范围: [{min(all_rewards):.3f}, {max(all_rewards):.3f}]")
-        print(f"  优势标准差: {np.std(all_rewards):.4f}")
+        # P0-2统计: 全零优势组计数 + 详细Batch级别诊断
+        zero_advantage_groups = 0
+        all_correct_groups = 0  # 全对组
+        all_wrong_groups = 0    # 全错组
+        mixed_groups = 0        # 混合组（有对有错）
+        group_reward_details = []  # 每组奖励详情
+
+        for i in range(0, len(all_rewards), num_sequences):
+            group_rewards = all_rewards[i:i+num_sequences]
+            group_std = np.std(group_rewards)
+            group_mean = np.mean(group_rewards)
+
+            # 统计组类型
+            if group_std < 1e-6:
+                zero_advantage_groups += 1
+                if group_mean > 0.5:  # 全对
+                    all_correct_groups += 1
+                elif group_mean < 0.1:  # 全错
+                    all_wrong_groups += 1
+            else:
+                mixed_groups += 1
+
+            group_reward_details.append({
+                'mean': group_mean,
+                'std': group_std,
+                'min': min(group_rewards),
+                'max': max(group_rewards),
+                'rewards': group_rewards[:4]  # 只记录前4个
+            })
+
+        print(f"\n🔧 GRPO诊断 (Batch级别):")
+        print(f"  全零方差组: {zero_advantage_groups}/{batch_size} ({zero_advantage_groups/batch_size*100:.1f}%)")
+        print(f"    ├── 全对组: {all_correct_groups}")
+        print(f"    ├── 全错组: {all_wrong_groups}")
+        print(f"    └── 其他同分组: {zero_advantage_groups - all_correct_groups - all_wrong_groups}")
+        print(f"  混合组(有差异): {mixed_groups}/{batch_size} ({mixed_groups/batch_size*100:.1f}%)")
+        print(f"  Batch奖励: mean={np.mean(all_rewards):.3f}, std={np.std(all_rewards):.4f}")
+        print(f"  奖励范围: [{min(all_rewards):.3f}, {max(all_rewards):.3f}]")
+
+        # 如果全对或全错组占比超过50%，打印详细信息
+        if (all_correct_groups + all_wrong_groups) / batch_size > 0.5:
+            print(f"  ⚠️  警告: 高同质性Batch! 全对+全错占{(all_correct_groups + all_wrong_groups)/batch_size*100:.0f}%")
+            print(f"  前3组奖励详情:")
+            for idx, detail in enumerate(group_reward_details[:3]):
+                print(f"    组{idx+1}: {detail['rewards']} (mean={detail['mean']:.2f}, std={detail['std']:.4f})")
 
         # ✨ 详细 wandb logging (实时仪表板) - P1增强版
         current_lr = self.scheduler.get_last_lr()[0]  # P1-3: 获取当前学习率
@@ -816,7 +867,7 @@ class GRPOTrainer:
         advantages: List[float],
         problem_types: List[str]
     ) -> Tuple[float, float]:
-        """更新策略（GRPO）"""
+        """更新策略（GRPO）- 内存优化版"""
 
         self.model.train()
 
@@ -826,6 +877,13 @@ class GRPOTrainer:
 
         # 梯度累积
         grad_accum_steps = self.config.get('gradient_accumulation_steps', 1)
+
+        # 🔧 OOM修复: 在策略更新前清理显存
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        # 🔧 OOM修复: 减小mini-batch大小，每次只处理1个样本
+        mini_batch_size = 1  # 减小到1，确保不OOM
 
         for i in range(0, len(workflows), grad_accum_steps):
             batch_slice = slice(i, min(i + grad_accum_steps, len(workflows)))
@@ -839,6 +897,10 @@ class GRPOTrainer:
                 old_log_prob = old_log_probs[j]
                 advantage = advantages[j]
                 problem_type = problem_types[j]
+
+                # 🔧 OOM修复: 每个样本处理前清理缓存
+                if j % 5 == 0:
+                    torch.cuda.empty_cache()
 
                 # 计算新log概率
                 new_log_prob = await self._compute_log_prob_trainable(problem, workflow, problem_type)

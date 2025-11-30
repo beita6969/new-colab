@@ -8,7 +8,17 @@ P0-3: 代码执行多进程隔离 + 部分通过奖励
 P0-4: 答案提取鲁棒性改进
 P1-2: Judge稳健性和调试日志
 P2-1: LLM Judge max_tokens从200增加到800，修复reasoning模型token不足导致content为空的问题
+P12: LLM提取作为主力，改进代码检测和函数重命名
 """
+import os
+
+# P12修复: 禁用代理，确保LLM Judge可以直连localhost:8002
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ['no_proxy'] = 'localhost,127.0.0.1'
+
 import sys
 import re
 import threading
@@ -484,6 +494,8 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
     def _compute_math_reward(self, problem: str, prediction: Any, ground_truth: Any, source: Optional[str]) -> float:
         """
         P0修复: Math任务5档细粒度奖励
+        P10修复: 使用OSS模型提取解释性文本中的答案
+        P11修复: 改进代码检测逻辑，避免误判数学解释文本
 
         奖励等级:
         - 1.0: 完美匹配
@@ -492,20 +504,81 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
         - 0.2: 格式正确 (有boxed或数字输出)
         - 0.0: 完全错误
         """
+        import re
+
         if prediction is None:
             return 0.0
 
         pred_str = str(prediction).strip()
         gt_str = str(ground_truth).strip()
 
-        # P0-FIX: 检测预测是否为代码格式（而非数学答案）
-        # 如果预测包含Python代码关键字，判定为格式错误(0.2)而非调用LLM Judge
-        code_keywords = ['import ', 'def ', 'class ', 'return ', 'print(', 'for ', 'while ', 'if __name__']
-        pred_lower = pred_str.lower()
-        if any(kw in pred_lower for kw in code_keywords):
+        # P12修复: LLM提取作为主力
+        # 策略: 对于任何非简单答案（长度>50或包含特殊格式），都尝试LLM提取
+        skip_code_detection = False
+        llm_extracted = False
+
+        # P12: 判断是否需要LLM提取（更激进的策略）
+        needs_extraction = (
+            len(pred_str) > 50 or  # 答案太长，可能包含解释
+            '**' in pred_str or    # Markdown格式
+            '```' in pred_str or   # 代码块
+            '\\boxed' in pred_str or  # LaTeX boxed
+            'Step' in pred_str or  # 步骤说明
+            'Therefore' in pred_str or 'Thus' in pred_str or 'Hence' in pred_str or  # 推理结论
+            'Answer' in pred_str   # 包含Answer关键字
+        )
+
+        if needs_extraction and self.use_llm_judge:
             if self.debug_logging:
-                print(f"  ⚠️  P0-FIX: 检测到代码格式答案，判定为格式错误(0.2)")
-            return 0.2  # 格式错误，不是有效的数学答案
+                print(f"  🔧 P12: 检测到需要提取的内容，使用LLM提取答案...")
+            extracted = self._extract_answer_with_llm(pred_str, problem, "math")
+            if extracted:
+                if self.debug_logging:
+                    print(f"  ✅ P12: LLM提取成功: {extracted[:50]}...")
+                pred_str = extracted
+                skip_code_detection = True
+                llm_extracted = True
+            else:
+                # LLM提取失败，尝试本地boxed提取
+                if self.debug_logging:
+                    print(f"  🔄 P12: LLM提取失败，尝试本地boxed提取...")
+                boxed_answer = self._extract_boxed_robust(pred_str)
+                # 检查boxed内容是否有效
+                invalid_boxed_prefixes = ['**Approach', '**Step', '**Solution', '**Analysis', '**Method', '**Let', 'Approach', 'Step']
+                boxed_is_invalid = boxed_answer and any(boxed_answer.strip().startswith(p) for p in invalid_boxed_prefixes)
+
+                if boxed_answer and not boxed_is_invalid and len(boxed_answer) < 100:
+                    if self.debug_logging:
+                        print(f"  ✅ P12: 本地boxed提取成功: {boxed_answer[:50]}...")
+                    pred_str = boxed_answer
+                    skip_code_detection = True
+                else:
+                    # 本地提取也失败，跳过代码检测让后续流程处理
+                    if self.debug_logging:
+                        print(f"  ⚠️  P12: 所有提取失败，跳过代码检测")
+                    skip_code_detection = True
+
+        # P11修复: 改进代码检测逻辑
+        # 使用更严格的正则模式，避免误判数学文本中的英文单词
+        if not skip_code_detection:
+            # 严格的Python代码模式（需要完整的语法结构）
+            strict_code_patterns = [
+                r'\bimport\s+[a-zA-Z_][a-zA-Z0-9_]*',      # import module
+                r'\bfrom\s+[a-zA-Z_][a-zA-Z0-9_.]*\s+import',  # from xxx import
+                r'\bdef\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(',    # def func(
+                r'\bclass\s+[a-zA-Z_][a-zA-Z0-9_]*\s*[:\(]',  # class Foo: 或 class Foo(
+                r'\bfor\s+[a-zA-Z_][a-zA-Z0-9_]*\s+in\s+',  # for x in (Python特有)
+                r'\bwhile\s+[a-zA-Z_][a-zA-Z0-9_]*\s*[:<>=!]',  # while x < (循环条件)
+                r'if\s+__name__\s*==',                      # if __name__ ==
+                r'print\s*\([^)]+\)',                       # print(xxx)
+            ]
+            pred_lower = pred_str.lower()
+            is_code = any(re.search(pattern, pred_lower) for pattern in strict_code_patterns)
+
+            if is_code:
+                if self.debug_logging:
+                    print(f"  ⚠️  P11-FIX: 检测到明确的代码结构，判定为格式错误(0.2)")
+                return 0.2  # 格式错误，不是有效的数学答案
 
         # 1. 首先尝试LLM Judge (如果启用)
         if self.use_llm_judge:
@@ -686,6 +759,32 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
                     print(f"  🔬 [CODE DEBUG] ✅ entry_point '{entry_point}' found in solution")
                 else:
                     print(f"  🔬 [CODE DEBUG] ❌ entry_point '{entry_point}' NOT found in solution")
+
+        # P12修复: 模糊函数名匹配 - 当entry_point不在solution中时，尝试找到实际定义的函数并重命名
+        if entry_point and f"def {entry_point}" not in solution:
+            # 查找solution中定义的所有函数
+            import re
+            defined_funcs = re.findall(r'def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', solution)
+            if defined_funcs:
+                # 找到第一个非私有函数（不以_开头）
+                actual_func = None
+                for func in defined_funcs:
+                    if not func.startswith('_'):
+                        actual_func = func
+                        break
+                if not actual_func:
+                    actual_func = defined_funcs[0]
+
+                # P12: 重命名函数以匹配entry_point
+                if actual_func != entry_point:
+                    old_def = f"def {actual_func}"
+                    new_def = f"def {entry_point}"
+                    solution = solution.replace(old_def, new_def, 1)
+                    # 同时替换函数调用（在函数体内的递归调用）
+                    # 使用\b确保只替换完整的函数名，避免替换子串
+                    solution = re.sub(rf'\b{re.escape(actual_func)}\s*\(', f'{entry_point}(', solution)
+                    if self.debug_logging:
+                        print(f"  🔬 [CODE DEBUG] P12: Renamed function '{actual_func}' -> '{entry_point}'")
 
         # P0根本性修复: 从 test_cases 中提取 entry_point (如 MBPP 数据集没有 entry_point 但有 test_cases)
         if not entry_point and test:
@@ -976,6 +1075,8 @@ def poly(xs: list, x: float):
     def _compute_qa_reward(self, problem: str, prediction: Any, ground_truth: Any, source: Optional[str]) -> float:
         """
         P1修复: QA任务评估 - 参考SQuAD/TriviaQA国际标准评估方法
+        P10修复: 使用OSS模型提取解释性文本中的答案
+        P11修复: 改进提取失败后的处理逻辑
 
         国际标准方法 (SQuAD官方评估):
         1. Exact Match (EM): 标准化后完全匹配
@@ -991,6 +1092,8 @@ def poly(xs: list, x: float):
         - 0.2: F1>=0.1 (有部分相关内容)
         - 0.0: 无匹配
         """
+        import re
+
         if prediction is None:
             return 0.0
 
@@ -999,6 +1102,38 @@ def poly(xs: list, x: float):
 
         if not pred_str:
             return 0.0
+
+        # P12修复: LLM提取作为主力（与Math逻辑一致）
+        # 策略: 对于任何非简单答案，都尝试LLM提取
+        needs_extraction = (
+            len(pred_str) > 50 or  # 答案太长
+            '**' in pred_str or    # Markdown格式
+            'Step' in pred_str or  # 步骤说明
+            'Answer' in pred_str or  # 包含Answer
+            'Explanation' in pred_str or  # 包含解释
+            'Therefore' in pred_str or 'Thus' in pred_str  # 推理结论
+        )
+
+        if needs_extraction and self.use_llm_judge:
+            if self.debug_logging:
+                print(f"  🔧 P12: 检测到QA需要提取的内容，使用LLM提取答案...")
+            extracted = self._extract_answer_with_llm(pred_str, problem, "qa")
+            if extracted:
+                if self.debug_logging:
+                    print(f"  ✅ P12: LLM提取成功: {extracted[:50]}...")
+                pred_str = extracted
+            else:
+                # LLM提取失败，尝试本地Answer模式提取
+                if self.debug_logging:
+                    print(f"  🔄 P12: LLM提取失败，尝试本地Answer模式提取...")
+                answer_match = re.search(r'\*\*Answer[:\*]*\s*[:\-–—]*\s*(.+?)(?:\n\n|\*\*|$)', pred_str, re.IGNORECASE | re.DOTALL)
+                if answer_match:
+                    local_extracted = answer_match.group(1).strip()
+                    local_extracted = re.sub(r'^[\*\#\-–—:]+|[\*\#\-–—:]+$', '', local_extracted).strip()
+                    if local_extracted and len(local_extracted) < 300:
+                        if self.debug_logging:
+                            print(f"  ✅ P12: 本地提取成功: {local_extracted[:50]}...")
+                        pred_str = local_extracted
 
         # 1. 首先尝试LLM Judge (如果启用) - 用于语义等价判断
         if self.use_llm_judge:
@@ -1242,6 +1377,90 @@ def poly(xs: list, x: float):
         else:
             return 0.0
 
+    def _extract_answer_with_llm(self, explanatory_text: str, problem: str, problem_type: str) -> Optional[str]:
+        """
+        P10修复: 使用OSS模型从解释性文本中提取简洁答案
+
+        Args:
+            explanatory_text: 包含解释的完整文本（如 **Step 1...** 格式）
+            problem: 原始问题
+            problem_type: 问题类型 (math/qa)
+
+        Returns:
+            提取的简洁答案，或None如果提取失败
+        """
+        if not self.llm_judge_client:
+            return None
+
+        # 构建提取答案的prompt
+        if problem_type == "math":
+            extract_prompt = f"""Extract ONLY the final numeric answer from the following solution text.
+
+Problem: {problem[:200]}
+
+Solution Text:
+{explanatory_text[:1000]}
+
+IMPORTANT: Return ONLY the final answer (a number, fraction, or simple expression like "42", "5/6", "2x+1").
+Do NOT include any explanations, steps, or formatting. Just the answer value.
+
+<answer>YOUR_ANSWER_HERE</answer>"""
+        else:  # qa
+            extract_prompt = f"""Extract ONLY the direct answer from the following response.
+
+Question: {problem[:200]}
+
+Response:
+{explanatory_text[:1000]}
+
+IMPORTANT: Return ONLY the direct answer (a name, place, date, number, or short phrase).
+Do NOT include any explanations or reasoning. Just the answer.
+
+<answer>YOUR_ANSWER_HERE</answer>"""
+
+        try:
+            response = self.llm_judge_client.chat.completions.create(
+                model=self.llm_judge_model,
+                messages=[
+                    {"role": "system", "content": "You are a precise answer extractor. Extract only the final answer."},
+                    {"role": "user", "content": extract_prompt}
+                ],
+                temperature=0.0,
+                max_tokens=100  # 答案应该很短
+            )
+
+            content = response.choices[0].message.content
+            if content is None:
+                return None
+
+            result = content.strip()
+
+            # 尝试从 <answer> 标签中提取
+            import re
+            answer_match = re.search(r'<answer>\s*(.+?)\s*</answer>', result, re.IGNORECASE | re.DOTALL)
+            if answer_match:
+                extracted = answer_match.group(1).strip()
+                # 清理提取的答案
+                extracted = re.sub(r'^[\*\#]+|[\*\#]+$', '', extracted).strip()  # 去除Markdown格式
+                if extracted and len(extracted) < 200:  # 合理长度的答案
+                    return extracted
+
+            # Fallback: 如果没有标签，尝试获取最后一行非空内容
+            lines = [l.strip() for l in result.split('\n') if l.strip()]
+            if lines:
+                last_line = lines[-1]
+                # 清理并返回
+                last_line = re.sub(r'^[\*\#]+|[\*\#]+$', '', last_line).strip()
+                if last_line and len(last_line) < 200:
+                    return last_line
+
+            return None
+
+        except Exception as e:
+            if self.debug_logging:
+                print(f"  ⚠️  P10 答案提取失败: {e}")
+            return None
+
     def _extract_math_answer(self, text: str) -> Optional[str]:
         """
         P0-4修复: 鲁棒的数学答案提取
@@ -1300,19 +1519,48 @@ def poly(xs: list, x: float):
     def _extract_boxed_robust(self, text: str) -> Optional[str]:
         """
         P0-4修复: 支持嵌套花括号的boxed提取
+        P12修复: 过滤无效的boxed内容（如解释性文本）
         """
         # 支持嵌套的正则（最多2层嵌套）
         pattern = r'\\boxed\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}'
         matches = re.findall(pattern, text, re.DOTALL)
 
+        def is_valid_boxed_content(content: str) -> bool:
+            """P12修复: 检查boxed内容是否为有效答案"""
+            if not content:
+                return False
+            content_stripped = content.strip()
+            # 无效模式：解释性文本开头
+            invalid_prefixes = [
+                '**Approach', '**Step', '**Solution', '**Analysis',
+                '**Method', '**Let', '**Define', '**Given',
+                'Approach', 'Step 1', 'Solution:', 'Let ',
+            ]
+            for prefix in invalid_prefixes:
+                if content_stripped.startswith(prefix):
+                    return False
+            # 无效模式：内容过长（超过200字符可能是解释而非答案）
+            if len(content_stripped) > 200:
+                # 但如果是数学表达式（含\frac等），允许更长
+                if not any(tex in content for tex in ['\\frac', '\\sqrt', '\\sum', '\\int']):
+                    return False
+            return True
+
         if matches:
-            # 返回最后一个匹配（通常是最终答案）
+            # P12修复: 从后往前找第一个有效的boxed内容
+            for match in reversed(matches):
+                if is_valid_boxed_content(match):
+                    return match.strip()
+            # 如果所有boxed都无效，返回最后一个（让后续流程处理）
             return matches[-1].strip()
 
         # Fallback: 简单模式
         simple_match = re.search(r'\\boxed\{([^}]+)\}', text)
         if simple_match:
-            return simple_match.group(1).strip()
+            content = simple_match.group(1).strip()
+            if is_valid_boxed_content(content):
+                return content
+            return content  # 即使无效也返回，让后续流程处理
 
         return None
 
@@ -1527,10 +1775,23 @@ def poly(xs: list, x: float):
 
     def _is_code_correct(self, prediction: str, ground_truth: str, test: Optional[str] = None, entry_point: Optional[str] = None) -> bool:
         """判断代码答案是否正确"""
+        import re
+
+        # P2修复: Strip markdown code block markers FIRST
+        prediction = str(prediction)
+        if '```' in prediction:
+            code_blocks = re.findall(r'```(?:python)?\s*\n?([^`]+)```', prediction)
+            if code_blocks:
+                prediction = code_blocks[-1].strip()
+            else:
+                prediction = re.sub(r'^```(?:python)?\n?', '', prediction)
+                prediction = re.sub(r'```$', '', prediction)
+                prediction = prediction.strip()
+
         # Prioritize execution-based checking if test cases are available
         if test and entry_point:
             return self._check_code_solution(prediction, test, entry_point)
-        
+
         # Fallback to string matching if execution is not possible
         try:
             pred_str = str(prediction).strip()
