@@ -34,7 +34,7 @@ prompt_max_length: 3072
 response_max_length: 5120
 
 # 模型配置
-base_model: "/home/yijia/verl-agent/models/qwen/Qwen2___5-7B-Instruct"
+base_model: "Qwen/Qwen2.5-7B-Instruct"  # HuggingFace模型名（自动使用缓存）
 model_dtype: "bfloat16"
 
 # =====================================
@@ -59,16 +59,16 @@ gradient_checkpointing: true       # 🔧 OOM修复: 启用梯度检查点
 
 # GPU配置
 device_mapping: [0]
-physical_gpus: [3]
+physical_gpus: [0]  # A100 single GPU
 protected_pids: []
 num_gpus: 1
 world_size: 1
 
 # 数据集配置
 data_dir: "data"
-train_dataset: "11/integrated_aflow_roll/data/ready_to_train/train_10k_final.jsonl"
-val_dataset: "11/integrated_aflow_roll/data/ready_to_train/test_500_preprocessed.jsonl"
-test_dataset: "11/integrated_aflow_roll/data/ready_to_train/test_500_preprocessed.jsonl"
+train_dataset: "data/ready_to_train/train_10k_final.jsonl"
+val_dataset: "data/ready_to_train/test_500_preprocessed.jsonl"
+test_dataset: "data/ready_to_train/test_500_preprocessed.jsonl"
 
 # 混合采样比例 (2:2:2 均匀分布)
 domain_ratios:
@@ -78,9 +78,9 @@ domain_ratios:
 
 # AFlow配置
 aflow_config_path: "config/aflow_llm.yaml"
-aflow_executor_model: "gpt-oss-120b"
+aflow_executor_model: "gpt-4o-mini"  # 使用OpenAI API
 aflow_operators: ["Custom", "AnswerGenerate", "Programmer", "ScEnsemble", "Test", "Review", "Revise"]
-aflow_operator_descriptions_path: "/home/yijia/.claude/11/AFlow/workspace/MATH/workflows/template/operator.json"
+aflow_operator_descriptions_path: "config/operator.json"  # 使用本地路径
 execution_timeout: 600
 
 # =====================================

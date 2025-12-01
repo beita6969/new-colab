@@ -21,12 +21,13 @@ except ImportError:
     from response_standardizer import ResponseStandardizer
     from sympy_code_fixer import SymPyCodeFixer
 
-# 添加AFlow到路径（添加多个可能需要的路径）
-aflow_path = '/home/yijia/.claude/11/AFlow'
-sys.path.insert(0, aflow_path)
-sys.path.insert(0, os.path.join(aflow_path, 'workspace'))
+# 添加项目根目录到路径以导入scripts模块
+import sys
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-# 导入AFlow组件
+# 导入本地scripts模块（兼容AFlow接口）
 from scripts.async_llm import create_llm_instance, LLMsConfig
 from scripts import operators as operator_module
 

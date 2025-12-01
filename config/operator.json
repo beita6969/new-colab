@@ -1,0 +1,30 @@
+{
+  "Custom": {
+    "description": "Generates anything based on customized input and instruction.",
+    "interface": "custom(input: str, instruction: str) -> dict with key 'response'"
+  },
+  "AnswerGenerate": {
+    "description": "Generates step-by-step reasoning and final answer.",
+    "interface": "answer_generate(input: str) -> dict with keys 'thought' and 'answer'"
+  },
+  "Programmer": {
+    "description": "Automatically writes and executes Python code.",
+    "interface": "programmer(problem: str, analysis: str = 'None') -> dict with keys 'code' and 'output'"
+  },
+  "ScEnsemble": {
+    "description": "Uses self-consistency to select the most frequent solution.",
+    "interface": "sc_ensemble(solutions: List[str], problem: str) -> dict with key 'response'"
+  },
+  "Test": {
+    "description": "Tests code with test cases.",
+    "interface": "test(problem: str, solution: str, entry_point: str) -> dict with keys 'result' and 'solution'"
+  },
+  "Review": {
+    "description": "Reviews and provides feedback on a solution.",
+    "interface": "review(problem: str, solution: str) -> dict with keys 'review_result' and 'feedback'"
+  },
+  "Revise": {
+    "description": "Revises solution based on feedback.",
+    "interface": "revise(problem: str, solution: str, feedback: str) -> dict with key 'solution'"
+  }
+}

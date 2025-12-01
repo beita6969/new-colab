@@ -12,12 +12,12 @@ P12: LLM提取作为主力，改进代码检测和函数重命名
 """
 import os
 
-# P12修复: 禁用代理，确保LLM Judge可以直连localhost:8002
-os.environ.pop('http_proxy', None)
-os.environ.pop('https_proxy', None)
-os.environ.pop('HTTP_PROXY', None)
-os.environ.pop('HTTPS_PROXY', None)
-os.environ['no_proxy'] = 'localhost,127.0.0.1'
+# P12修复: 不再禁用代理，使用OpenAI API需要网络
+# os.environ.pop('http_proxy', None)
+# os.environ.pop('https_proxy', None)
+# os.environ.pop('HTTP_PROXY', None)
+# os.environ.pop('HTTPS_PROXY', None)
+# os.environ['no_proxy'] = 'localhost,127.0.0.1'
 
 import sys
 import re
@@ -30,8 +30,10 @@ from multiprocessing import Process, Queue
 from typing import Any, Dict, Optional, List, Tuple
 from pathlib import Path
 
-# 添加AFlow到路径
-sys.path.insert(0, '/home/yijia/.claude/11/AFlow')
+# 添加项目根目录到路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 导入答案提取器
 try:
@@ -127,15 +129,15 @@ class RewardComputer:
         }
 
     def _init_llm_judge_client(self, llm_config: Optional[Dict]):
-        """初始化LLM Judge客户端（使用GPT OSS 120B）"""
+        """初始化LLM Judge客户端（使用OpenAI API）"""
         try:
             from openai import OpenAI
 
-            # 使用port 8002的GPT OSS 120B模型
+            # 使用OpenAI API
             default_config = {
-                "base_url": "http://localhost:8002/v1",
-                "api_key": "sk-dummy",  # vLLM不需要真实key
-                "model_name": "/home/yijia/lhy/openai/gpt-oss-120b"  # 完整模型路径
+                "base_url": "https://api.openai.com/v1",
+                "api_key": os.environ.get('OPENAI_API_KEY', 'sk-dummy'),
+                "model_name": "gpt-4o-mini"
             }
 
             config = llm_config or default_config

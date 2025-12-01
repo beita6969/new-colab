@@ -100,3 +100,4 @@ compare_training.sh
 # 中文文档
 数据集质量分析报告.md
 训练效果深度分析.md
+.venv/

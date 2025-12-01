@@ -214,11 +214,11 @@ class GRPOTrainer:
         print("\n🎯 初始化奖励计算器...")
         self.reward_computer = RewardComputer(
             reward_weights=self.config.get('reward_weights'),
-            use_llm_judge=True,  # 启用LLM Judge (GPT OSS 120B @ port 8002)
+            use_llm_judge=True,  # 启用LLM Judge (使用OpenAI API)
             llm_config={
-                "base_url": "http://localhost:8002/v1",
-                "api_key": "sk-dummy",
-                "model_name": "/home/yijia/lhy/openai/gpt-oss-120b"
+                "base_url": "https://api.openai.com/v1",
+                "api_key": os.environ.get('OPENAI_API_KEY', 'sk-dummy'),
+                "model_name": "gpt-4o-mini"
             },
             debug_logging=self.config.get('debug', False)  # P0修复: 传递debug设置
         )
@@ -1242,7 +1242,7 @@ class GRPOTrainer:
             print(f"{'=' * 60}")
 
             # 🛡️ OOM保护: 检查GPU显存，如果不足则等待
-            await self._wait_for_gpu_memory(min_free_gb=30, max_wait_seconds=300)
+            await self._wait_for_gpu_memory(min_free_gb=10, max_wait_seconds=300)
 
             # 训练步骤 (带OOM重试)
             import gc as gc_module
@@ -1259,7 +1259,7 @@ class GRPOTrainer:
                         wait_time = 30 * (retry + 1)  # 30s, 60s, 90s
                         print(f"   等待 {wait_time}s 后重试...")
                         await asyncio.sleep(wait_time)
-                        await self._wait_for_gpu_memory(min_free_gb=50, max_wait_seconds=180)
+                        await self._wait_for_gpu_memory(min_free_gb=15, max_wait_seconds=180)
                     else:
                         print(f"❌ OOM重试{max_retries}次后仍失败，跳过此step")
                         metrics = {'loss': 0.0, 'skipped': True}
