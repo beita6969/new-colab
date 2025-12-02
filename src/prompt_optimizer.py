@@ -281,6 +281,30 @@ class Workflow:
                 "example_call": "revised = await self.revise(problem=problem, solution=code, feedback=feedback)\nrevised_code = revised.get('solution', code)  # Extract 'solution' with fallback",
                 "required_params": ["problem", "solution", "feedback"],
                 "note": "Returns dict with 'solution' key - always use .get() to avoid KeyError"
+            },
+            "MdEnsemble": {
+                "description": "Majority voting ensemble (more robust than ScEnsemble). Shuffles and votes multiple times.",
+                "interface": "MdEnsemble(solutions: List[str], problem: str)",
+                "returns": "{'solution': str}",
+                "example_call": "result = await self.md_ensemble(solutions=[sol1, sol2, sol3], problem=problem)\nbest = result.get('solution', '')",
+                "required_params": ["solutions", "problem"],
+                "note": "Better for noisy/uncertain problems - uses multiple voting rounds"
+            },
+            "Decompose": {
+                "description": "Break complex problem into simpler sub-problems. Best for multi-step reasoning.",
+                "interface": "Decompose(problem: str)",
+                "returns": "{'subproblems': List[str], 'reasoning': str, 'count': int}",
+                "example_call": "result = await self.decompose(problem=problem)\nsubproblems = result.get('subproblems', [problem])",
+                "required_params": ["problem"],
+                "note": "Useful for complex math or multi-part questions"
+            },
+            "Verify": {
+                "description": "Verify answer correctness and provide corrections if invalid.",
+                "interface": "Verify(problem: str, answer: str)",
+                "returns": "{'is_valid': bool, 'issues': List[str], 'corrected_answer': str}",
+                "example_call": "result = await self.verify(problem=problem, answer=solution)\nif not result.get('is_valid', True):\n    solution = result.get('corrected_answer', solution)",
+                "required_params": ["problem", "answer"],
+                "note": "Double-check answers before returning - catches calculation errors"
             }
         }
 

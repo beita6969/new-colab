@@ -667,6 +667,7 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
         """
         P0修复: Code任务多进程隔离执行 + 部分通过奖励
         P6修复: 支持HumanEval格式(problem=函数签名, prediction=函数体)
+        P13修复: 支持MBPP格式(test_cases是列表，需转换为字符串)
 
         奖励等级:
         - 1.0: 所有测试通过
@@ -675,6 +676,15 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
         - 0.2: >20%测试通过或代码语法正确
         - 0.0: 完全失败
         """
+        # P13修复: MBPP使用test_cases列表格式，需要转换为字符串
+        # MBPP格式: test_cases = ['assert func(x) == y', 'assert func(a) == b', ...]
+        # HumanEval格式: test = 'def check(candidate):\n    assert ...'
+        if isinstance(test, list):
+            # 将列表格式的测试用例转换为可执行的字符串
+            test = '\n'.join(test)
+            if self.debug_logging:
+                print(f"  🔬 [CODE DEBUG] P13: Converted test_cases list to string ({len(test)} chars)")
+
         # P3: 添加详细debug logging诊断Code问题
         if self.debug_logging:
             print(f"  🔬 [CODE DEBUG] prediction type: {type(prediction).__name__}")
@@ -729,29 +739,46 @@ Be LENIENT with formatting differences but STRICT with factual/numerical differe
             has_def_in_problem = f"def {entry_point}" in str(problem)
 
             if not has_def_in_solution and has_def_in_problem:
-                # solution只是函数体，需要从problem提取签名并合并
-                problem_str = str(problem)
-                # 找到函数签名结束位置（第一个冒号后）
+                # Bug2 修复: 检查 solution 是否已经包含其他函数定义
+                # 如果是，直接重命名而不是 merge（避免嵌套函数缩进问题）
                 import re
-                signature_match = re.search(rf'(def\s+{re.escape(entry_point)}\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:)', problem_str)
-                if signature_match:
-                    func_signature = signature_match.group(1)
-                    # 确保函数体有正确的缩进
-                    body_lines = solution.split('\n')
-                    indented_body = []
-                    for line in body_lines:
-                        if line.strip():  # 非空行
-                            # 如果行没有足够的缩进，添加4个空格
-                            if not line.startswith('    ') and not line.startswith('\t'):
-                                indented_body.append('    ' + line)
+                existing_func_match = re.search(r'^def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', solution, re.MULTILINE)
+
+                if existing_func_match:
+                    # solution 已有函数定义，直接重命名为 entry_point
+                    existing_func_name = existing_func_match.group(1)
+                    if existing_func_name != entry_point:
+                        solution = re.sub(
+                            rf'\bdef\s+{re.escape(existing_func_name)}\s*\(',
+                            f'def {entry_point}(',
+                            solution,
+                            count=1  # 只替换第一个
+                        )
+                        if self.debug_logging:
+                            print(f"  🔬 [CODE DEBUG] P6-Bug2: Renamed '{existing_func_name}' -> '{entry_point}' (避免merge缩进问题)")
+                else:
+                    # solution 只是函数体（没有 def），需要从 problem 提取签名并合并
+                    problem_str = str(problem)
+                    # 找到函数签名结束位置（第一个冒号后）
+                    signature_match = re.search(rf'(def\s+{re.escape(entry_point)}\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:)', problem_str)
+                    if signature_match:
+                        func_signature = signature_match.group(1)
+                        # 确保函数体有正确的缩进
+                        body_lines = solution.split('\n')
+                        indented_body = []
+                        for line in body_lines:
+                            if line.strip():  # 非空行
+                                # 如果行没有足够的缩进，添加4个空格
+                                if not line.startswith('    ') and not line.startswith('\t'):
+                                    indented_body.append('    ' + line)
+                                else:
+                                    indented_body.append(line)
                             else:
                                 indented_body.append(line)
-                        else:
-                            indented_body.append(line)
-                    solution = func_signature + '\n' + '\n'.join(indented_body)
-                    if self.debug_logging:
-                        print(f"  🔬 [CODE DEBUG] P6: Merged function signature from problem")
-                        print(f"  🔬 [CODE DEBUG] P6: merged solution[:200]: {solution[:200]}")
+                        solution = func_signature + '\n' + '\n'.join(indented_body)
+                        if self.debug_logging:
+                            print(f"  🔬 [CODE DEBUG] P6: Merged function signature from problem")
+                            print(f"  🔬 [CODE DEBUG] P6: merged solution[:200]: {solution[:200]}")
 
         if self.debug_logging:
             print(f"  🔬 [CODE DEBUG] cleaned solution[:300]: {solution[:300]}")

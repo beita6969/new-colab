@@ -104,12 +104,37 @@ class VLLMWorkflowGenerator:
             "Revise": {
                 "description": "Revises solution based on feedback.",
                 "interface": "revise(problem: str, solution: str, feedback: str) -> dict with key 'solution'"
+            },
+            "MdEnsemble": {
+                "description": "Majority voting ensemble - shuffles and votes multiple times to select best solution (more robust than ScEnsemble).",
+                "interface": "md_ensemble(solutions: List[str], problem: str) -> dict with key 'solution'"
+            },
+            "Decompose": {
+                "description": "Decomposes complex problems into simpler sub-problems for step-by-step solving.",
+                "interface": "decompose(problem: str) -> dict with keys 'subproblems', 'reasoning', 'count'"
+            },
+            "Verify": {
+                "description": "Verifies if an answer satisfies all problem constraints, provides corrections if invalid.",
+                "interface": "verify(problem: str, answer: str) -> dict with keys 'is_valid', 'issues', 'corrected_answer'"
             }
         }
 
     def _build_generation_prompt(self, problem: str, problem_type: str) -> str:
         """构建生成提示词 - 自由探索算子组合 + TASK_PROMPT优化"""
-        prompt = f"""Generate a Python Workflow to solve the given problem.
+        prompt = f"""🚨🚨🚨 CRITICAL: You MUST output a Python `class Workflow` - DO NOT solve the problem directly! 🚨🚨🚨
+
+Your task is to generate a **Python Workflow class** that will solve problems like the one given below.
+You are NOT solving the problem - you are DESIGNING a workflow that an LLM will use to solve it.
+
+## ⚠️ MANDATORY OUTPUT FORMAT:
+You MUST output:
+1. A TASK_PROMPT string (instructions for the execution LLM)
+2. A `class Workflow` with `__init__` and `async def __call__` methods
+
+DO NOT:
+- Directly answer the problem (e.g., "The answer is 42")
+- Output explanations without the Workflow class
+- Skip the class definition
 
 ## YOUR GOAL: Design the best workflow by COMBINING operators freely!
 - **COMBINE** 1-7 operators in creative ways (not just pick one!)
@@ -167,6 +192,27 @@ Good prompts include:
    Call: await self.test(problem=str, solution=str, entry_point=str)
    Returns: {{'result': bool, 'solution': str}}
    **IMPORTANT**: For code problems, entry_point is provided as __call__ parameter!
+
+8. **MdEnsemble(llm)** - Robust majority voting (better than ScEnsemble)
+   Call: await self.md_ensemble(solutions=list, problem=str)
+   Returns: {{'solution': str}}
+   **USE CASE**: When you have multiple solutions and want the most reliable answer.
+   **HOW IT WORKS**: Shuffles solutions and votes multiple times to avoid position bias.
+   **BETTER THAN ScEnsemble** for noisy or uncertain problems.
+
+9. **Decompose(llm)** - Break complex problems into sub-problems
+   Call: await self.decompose(problem=str)
+   Returns: {{'subproblems': list, 'reasoning': str, 'count': int}}
+   **USE CASE**: When problem is too complex to solve directly.
+   **WORKFLOW**: decompose -> solve each subproblem -> combine results.
+   **BEST FOR**: Multi-step math, multi-part questions, complex reasoning.
+
+10. **Verify(llm)** - Verify and correct answers
+   Call: await self.verify(problem=str, answer=str)
+   Returns: {{'is_valid': bool, 'issues': list, 'corrected_answer': str}}
+   **USE CASE**: Double-check answers before returning.
+   **WORKFLOW**: generate answer -> verify -> use corrected_answer if invalid.
+   **BEST FOR**: Math problems, factual QA, any problem where correctness matters.
 
 ## OUTPUT FORMAT:
 
@@ -377,7 +423,7 @@ Generate your PROMPT_CUSTOM and Workflow class:
         if code_start == -1:
             code_start = generated_text.find("class Workflow:")
             if code_start == -1:
-                return self._get_default_workflow(problem_type), False, "No Workflow class found"
+                return "", False, "No Workflow class found"
             code = generated_text[code_start:]
         else:
             code_start += len("```python\n")
@@ -525,7 +571,7 @@ Provide a clear, structured answer with reasoning."""
                     op_class_name = ''.join(word.capitalize() for word in op_name.split('_'))
 
                     # 检查是否是有效的operator（从prompt中获取）
-                    valid_operators = ['Custom', 'AnswerGenerate', 'Programmer', 'Test', 'Review', 'Revise', 'ScEnsemble']
+                    valid_operators = ['Custom', 'AnswerGenerate', 'Programmer', 'Test', 'Review', 'Revise', 'ScEnsemble', 'MdEnsemble', 'Decompose', 'Verify']
                     if op_class_name in valid_operators:
                         missing_inits.append(f"{indent}self.{op_name} = operator.{op_class_name}(self.llm)")
 

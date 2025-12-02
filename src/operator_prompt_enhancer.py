@@ -63,7 +63,11 @@ class OperatorPromptEnhancer:
             enhanced_kwargs = self._enhance_review(enhanced_kwargs, problem_type)
         elif operator_name == "Revise":
             enhanced_kwargs = self._enhance_revise(enhanced_kwargs, problem_type)
-        # ScEnsemble不需要增强
+        elif operator_name == "Decompose":
+            enhanced_kwargs = self._enhance_decompose(enhanced_kwargs, problem_type)
+        elif operator_name == "Verify":
+            enhanced_kwargs = self._enhance_verify(enhanced_kwargs, problem_type)
+        # ScEnsemble, MdEnsemble不需要增强
 
         return enhanced_kwargs
 
@@ -196,6 +200,58 @@ class OperatorPromptEnhancer:
         # Revise operator的feedback已经包含指导，不需要额外增强
         return kwargs
 
+    def _enhance_decompose(
+        self,
+        kwargs: Dict,
+        problem_type: str
+    ) -> Dict:
+        """
+        增强Decompose operator
+
+        Decompose API: decompose(problem=str)
+        """
+        if 'problem' not in kwargs:
+            return kwargs
+
+        original_problem = kwargs['problem']
+
+        # 根据问题类型添加分解指导
+        if problem_type == "math":
+            hint = "[For gpt-oss-120b: Break into calculation steps]\n\n"
+        elif problem_type == "code":
+            hint = "[For gpt-oss-120b: Break into implementation components]\n\n"
+        else:  # qa
+            hint = "[For gpt-oss-120b: Break into information gathering steps]\n\n"
+
+        kwargs['problem'] = f"{hint}{original_problem}"
+        return kwargs
+
+    def _enhance_verify(
+        self,
+        kwargs: Dict,
+        problem_type: str
+    ) -> Dict:
+        """
+        增强Verify operator
+
+        Verify API: verify(problem=str, answer=str)
+        """
+        if 'problem' not in kwargs:
+            return kwargs
+
+        original_problem = kwargs['problem']
+
+        # 添加验证指导
+        if problem_type == "math":
+            hint = "\n\n[Verify checklist: calculation correctness, units, format]"
+        elif problem_type == "code":
+            hint = "\n\n[Verify checklist: syntax, logic, edge cases, output format]"
+        else:  # qa
+            hint = "\n\n[Verify checklist: factual accuracy, completeness, relevance]"
+
+        kwargs['problem'] = f"{original_problem}{hint}"
+        return kwargs
+
     def _build_direct_enhancement(
         self,
         operator_name: str,
@@ -244,6 +300,10 @@ class OperatorPromptEnhancer:
                 "enhancement_target": "none",
                 "guidance": ""
             },
+            "MdEnsemble": {
+                "enhancement_target": "none",
+                "guidance": ""
+            },
             "Test": {
                 "enhancement_target": "test_cases",
                 "guidance": ""
@@ -255,5 +315,13 @@ class OperatorPromptEnhancer:
             "Revise": {
                 "enhancement_target": "feedback",
                 "guidance": ""
+            },
+            "Decompose": {
+                "enhancement_target": "problem",
+                "guidance": "[For gpt-oss-120b: Break problem into logical steps]"
+            },
+            "Verify": {
+                "enhancement_target": "problem",
+                "guidance": "[For gpt-oss-120b: Check all constraints and correctness]"
             }
         }

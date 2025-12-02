@@ -23,7 +23,7 @@ class WorkflowValidator:
         self.valid_operators = [
             'Custom', 'AnswerGenerate', 'Programmer', 'ScEnsemble',
             'Test', 'Review', 'Revise', 'CustomCodeGenerate',
-            'Format', 'MdEnsemble'
+            'Format', 'MdEnsemble', 'Decompose', 'Verify'
         ]
 
         # 算子参数要求
@@ -37,7 +37,9 @@ class WorkflowValidator:
             'Revise': ['problem', 'solution', 'feedback'],
             'CustomCodeGenerate': ['problem', 'entry_point', 'instruction'],
             'Format': ['problem', 'solution'],
-            'MdEnsemble': ['solutions', 'problem']
+            'MdEnsemble': ['solutions', 'problem'],
+            'Decompose': ['problem'],
+            'Verify': ['problem', 'answer']
         }
 
     def validate_workflow_code(self, code: str, problem_type: str = 'math') -> Tuple[bool, str, Dict]:

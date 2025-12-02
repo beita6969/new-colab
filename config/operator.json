@@ -26,5 +26,17 @@
   "Revise": {
     "description": "Revises solution based on feedback.",
     "interface": "revise(problem: str, solution: str, feedback: str) -> dict with key 'solution'"
+  },
+  "MdEnsemble": {
+    "description": "Majority voting ensemble - shuffles and votes multiple times for robust selection.",
+    "interface": "md_ensemble(solutions: List[str], problem: str) -> dict with key 'solution'"
+  },
+  "Decompose": {
+    "description": "Decomposes complex problems into simpler sub-problems.",
+    "interface": "decompose(problem: str) -> dict with keys 'subproblems', 'reasoning', 'count'"
+  },
+  "Verify": {
+    "description": "Verifies answer correctness and provides corrections if invalid.",
+    "interface": "verify(problem: str, answer: str) -> dict with keys 'is_valid', 'issues', 'corrected_answer'"
   }
 }

@@ -1,0 +1,15 @@
+{
+  "easy_per_group": 2,
+  "hard_per_group": 2,
+  "weight_easy": 0.3,
+  "weight_hard": 0.7,
+  "total_groups": 880,
+  "train_groups": 704,
+  "val_groups": 88,
+  "test_groups": 88,
+  "domain_groups": {
+    "math": 300,
+    "qa": 500,
+    "code": 80
+  }
+}

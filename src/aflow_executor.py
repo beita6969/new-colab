@@ -813,10 +813,11 @@ class AFlowExecutor:
 
         try:
             if self.llm_configs:
-                result = self.llm_configs.get(self.llm_model_name)
+                # Bug3 修复: LLMsConfig 没有 .get() 方法，应该访问 .models 属性
+                result = self.llm_configs.models.get(self.llm_model_name)
             else:
                 # 尝试使用默认配置
-                result = LLMsConfig.default().get(self.llm_model_name)
+                result = LLMsConfig.default().models.get(self.llm_model_name)
 
             # 类型验证（关键！）
             if isinstance(result, LLMConfig):
