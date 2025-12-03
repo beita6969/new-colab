@@ -65,6 +65,7 @@ class AFlowExecutor:
         print(f"✅ AFlow执行器初始化完成")
         print(f"  LLM模型: {llm_model_name}")
         print(f"  超时: {timeout}秒")
+        print(f"  XML支持: 启用")  # 新增XML支持提示
         if operator_enhancer is not None:
             print(f"  Layer 2增强: 启用")
 
@@ -137,6 +138,78 @@ class AFlowExecutor:
         else:
             return standardized
 
+    def _preprocess_workflow_code(self, workflow_input: str) -> Tuple[str, str]:
+        """
+        预处理工作流输入 - 支持XML格式和纯Python代码
+
+        Args:
+            workflow_input: 工作流输入（可能是XML格式或纯Python代码）
+
+        Returns:
+            (graph_code, prompt_code) - 提取的Python代码和TASK_PROMPT
+        """
+        import re
+
+        # 检测是否为XML格式
+        if '<graph>' in workflow_input and '</graph>' in workflow_input:
+            print(f"  📝 检测到XML格式工作流，正在提取...")
+            return self._extract_from_xml(workflow_input)
+
+        # 检测是否为<workflow>包装的XML
+        if '<workflow>' in workflow_input and '</workflow>' in workflow_input:
+            print(f"  📝 检测到<workflow>包装的XML格式，正在提取...")
+            return self._extract_from_xml(workflow_input)
+
+        # 回退到纯Python代码格式
+        return workflow_input, ""
+
+    def _extract_from_xml(self, xml_input: str) -> Tuple[str, str]:
+        """
+        从XML格式工作流中提取graph代码和prompt
+
+        Args:
+            xml_input: XML格式的工作流输入
+
+        Returns:
+            (graph_code, prompt_code)
+        """
+        import re
+
+        graph_code = ""
+        prompt_code = ""
+
+        # 提取 <graph>...</graph>
+        graph_match = re.search(r'<graph>\s*([\s\S]*?)\s*</graph>', xml_input)
+        if graph_match:
+            graph_code = graph_match.group(1).strip()
+            print(f"  ✅ 从<graph>提取代码，长度: {len(graph_code)}")
+
+        # 提取 <prompt>...</prompt>
+        prompt_match = re.search(r'<prompt>\s*([\s\S]*?)\s*</prompt>', xml_input)
+        if prompt_match:
+            prompt_code = prompt_match.group(1).strip()
+            print(f"  ✅ 从<prompt>提取TASK_PROMPT，长度: {len(prompt_code)}")
+
+        # 如果graph_code为空，尝试整体作为代码
+        if not graph_code:
+            print(f"  ⚠️ 未找到<graph>标签，尝试作为纯Python代码处理")
+            # 移除XML标签后的内容可能就是Python代码
+            cleaned = re.sub(r'</?workflow>', '', xml_input)
+            cleaned = re.sub(r'</?graph>', '', cleaned)
+            cleaned = re.sub(r'<prompt>.*?</prompt>', '', cleaned, flags=re.DOTALL)
+            if 'class Workflow' in cleaned:
+                graph_code = cleaned.strip()
+
+        # 如果有prompt_code但graph_code不包含TASK_PROMPT，则合并
+        if prompt_code and graph_code and 'TASK_PROMPT' not in graph_code:
+            # 在class Workflow之前添加TASK_PROMPT
+            class_match = re.search(r'^class Workflow', graph_code, re.MULTILINE)
+            if class_match:
+                graph_code = prompt_code + "\n\n" + graph_code
+                print(f"  📝 已将TASK_PROMPT合并到graph代码中")
+
+        return graph_code, prompt_code
+
     async def execute_workflow(
         self,
         workflow_code: str,
@@ -158,6 +231,19 @@ class AFlowExecutor:
         """
 
         start_time = time.time()
+
+        # 🔧 新增: XML格式预处理 - 支持AFlow风格XML工作流
+        workflow_code, extracted_prompt = self._preprocess_workflow_code(workflow_code)
+        if not workflow_code:
+            print(f"⚠️  无法从输入中提取工作流代码")
+            if self.enable_fallback:
+                return await self._execute_fallback_workflow(
+                    problem, problem_type,
+                    error_info="Failed to extract workflow code from input",
+                    **kwargs
+                )
+            else:
+                raise ValueError("无法从输入中提取工作流代码")
 
         # 🔧 智能输入格式化：根据数据源注入context等信息
         # 构造sample字典用于格式化（从kwargs提取相关字段）

@@ -79,196 +79,164 @@ class VLLMWorkflowGenerator:
             with open(descriptions_path, 'r') as f:
                 return json.load(f)
 
-        # 默认算子描述
+        # 默认算子描述 - AFlow标准10个算子
         return {
             "Custom": {
                 "description": "Generates anything based on customized input and instruction.",
                 "interface": "custom(input: str, instruction: str) -> dict with key 'response'"
             },
             "AnswerGenerate": {
-                "description": "Generates step-by-step reasoning and final answer.",
+                "description": "Generates step-by-step reasoning with thought process and final answer.",
                 "interface": "answer_generate(input: str) -> dict with keys 'thought' and 'answer'"
             },
+            "CustomCodeGenerate": {
+                "description": "Generates code based on customized input and instruction.",
+                "interface": "custom_code_generate(problem: str, entry_point: str, instruction: str) -> dict with key 'code'"
+            },
             "Programmer": {
-                "description": "Automatically writes and executes Python code.",
+                "description": "Automatically writes and executes Python code, returns execution result.",
                 "interface": "programmer(problem: str, analysis: str = 'None') -> dict with keys 'code' and 'output'"
             },
-            "ScEnsemble": {
-                "description": "Uses self-consistency to select the most frequent solution.",
-                "interface": "sc_ensemble(solutions: List[str], problem: str) -> dict with key 'response'"
+            "Test": {
+                "description": "Tests code with test cases, reflects on errors and revises.",
+                "interface": "test(problem: str, solution: str, entry_point: str, test_loop: int = 3) -> dict with keys 'result' and 'solution'"
+            },
+            "Format": {
+                "description": "Extracts concise answer from verbose solution.",
+                "interface": "format(problem: str, solution: str) -> dict with key 'solution'"
             },
             "Review": {
-                "description": "Reviews and provides feedback on a solution.",
-                "interface": "review(problem: str, solution: str) -> dict with keys 'review_result' and 'feedback'"
+                "description": "Reviews solution correctness using critical thinking.",
+                "interface": "review(problem: str, solution: str) -> dict with keys 'review_result' (bool) and 'feedback'"
             },
             "Revise": {
                 "description": "Revises solution based on feedback.",
                 "interface": "revise(problem: str, solution: str, feedback: str) -> dict with key 'solution'"
             },
+            "ScEnsemble": {
+                "description": "Uses self-consistency to select the most frequent solution.",
+                "interface": "sc_ensemble(solutions: List[str], problem: str) -> dict with key 'response'"
+            },
             "MdEnsemble": {
-                "description": "Majority voting ensemble - shuffles and votes multiple times to select best solution (more robust than ScEnsemble).",
+                "description": "Majority voting ensemble - shuffles and votes multiple times (more robust than ScEnsemble).",
                 "interface": "md_ensemble(solutions: List[str], problem: str) -> dict with key 'solution'"
-            },
-            "Decompose": {
-                "description": "Decomposes complex problems into simpler sub-problems for step-by-step solving.",
-                "interface": "decompose(problem: str) -> dict with keys 'subproblems', 'reasoning', 'count'"
-            },
-            "Verify": {
-                "description": "Verifies if an answer satisfies all problem constraints, provides corrections if invalid.",
-                "interface": "verify(problem: str, answer: str) -> dict with keys 'is_valid', 'issues', 'corrected_answer'"
             }
         }
 
     def _build_generation_prompt(self, problem: str, problem_type: str) -> str:
-        """构建生成提示词 - 自由探索算子组合 + TASK_PROMPT优化"""
-        prompt = f"""🚨🚨🚨 CRITICAL: You MUST output a Python `class Workflow` - DO NOT solve the problem directly! 🚨🚨🚨
+        """构建生成提示词 - AFlow风格XML输出格式"""
+        prompt = f"""You are building a Workflow to solve {problem_type} problems.
 
-Your task is to generate a **Python Workflow class** that will solve problems like the one given below.
-You are NOT solving the problem - you are DESIGNING a workflow that an LLM will use to solve it.
+## 🚨 CRITICAL: OUTPUT FORMAT
+You MUST output your workflow in XML format with <graph> and <prompt> tags:
 
-## ⚠️ MANDATORY OUTPUT FORMAT:
-You MUST output:
-1. A TASK_PROMPT string (instructions for the execution LLM)
-2. A `class Workflow` with `__init__` and `async def __call__` methods
+<workflow>
+<graph>
+[Your Python Workflow class code here]
+</graph>
+<prompt>
+[Your custom TASK_PROMPT here]
+</prompt>
+</workflow>
 
 DO NOT:
-- Directly answer the problem (e.g., "The answer is 42")
-- Output explanations without the Workflow class
-- Skip the class definition
+- Directly answer the problem
+- Output explanations without the XML tags
+- Skip the <graph> or <prompt> sections
 
-## YOUR GOAL: Design the best workflow by COMBINING operators freely!
-- **COMBINE** 1-7 operators in creative ways (not just pick one!)
-- Design effective TASK_PROMPT to guide the execution LLM
-- The TASK_PROMPT will be automatically injected into the problem input
-- Think: What combination of operators would solve this problem best?
+## Available Operators (AFlow Standard - 10 Operators)
 
-## TASK_PROMPT (Required)
-Define a TASK_PROMPT that guides the LLM. This prompt will be prepended to the problem.
-Good prompts include:
-- Problem-solving strategies
-- Step-by-step instructions
-- Format requirements (e.g., \\boxed{{}} for math answers)
-- Domain-specific hints
-
-## Available Operators (COMBINE freely - use 1 or more together!):
-
-1. **Custom(llm)** - Execute with YOUR custom instruction
+1. **Custom(llm)** - Execute with custom instruction
    Call: await self.custom(input=str, instruction=str)
    Returns: {{'response': str}}
 
-2. **AnswerGenerate(llm)** - Step-by-step reasoning
+2. **AnswerGenerate(llm)** - Step-by-step reasoning with thought and answer
    Call: await self.answer_generate(input=str)
    Returns: {{'thought': str, 'answer': str}}
 
-3. **Programmer(llm)** - Generate and execute Python code, returns EXECUTION RESULT
+3. **CustomCodeGenerate(llm)** - Generate code with custom instruction
+   Call: await self.custom_code_generate(problem=str, entry_point=str, instruction=str)
+   Returns: {{'code': str}}
+
+4. **Programmer(llm)** - Generate and execute Python code
    Call: await self.programmer(problem=str, analysis=str)
-   Returns: {{'code': str (source code - NEVER USE AS ANSWER!), 'output': str (EXECUTION RESULT - ALWAYS USE!)}}
+   Returns: {{'code': str (source), 'output': str (RESULT - USE THIS!)}}
+   ⚠️ CRITICAL: result['output'] = computed answer, result['code'] = source code
 
-   🚨🚨🚨 MOST COMMON BUG - READ 3 TIMES 🚨🚨🚨
-   result['output'] = THE COMPUTED ANSWER (e.g., "42", "3.14", "hello world")
-   result['code'] = Python source code (e.g., "def solve(): return 42") - THIS IS NOT THE ANSWER!
+5. **Test(llm)** - Test code with test cases and reflect/revise
+   Call: await self.test(problem=str, solution=str, entry_point=str)
+   Returns: {{'result': bool, 'solution': str}}
 
-   ✅✅✅ ALWAYS DO THIS:
-   answer = result['output']  # Gets the ANSWER: "42"
-   return f"\\boxed{{{{{{answer}}}}}}", cost  # Returns \\boxed{{42}} ✓
+6. **Format(llm)** - Extract concise answer from solution
+   Call: await self.format(problem=str, solution=str)
+   Returns: {{'solution': str}}
 
-   ❌❌❌ NEVER DO THIS:
-   answer = result['code']  # Gets SOURCE CODE: "def solve()..." - BUG!
-   return f"\\boxed{{{{{{answer}}}}}}", cost  # Returns \\boxed{{def solve...}} - WRONG!
-
-4. **Review(llm)** - Review solution
+7. **Review(llm)** - Review solution correctness
    Call: await self.review(problem=str, solution=str)
    Returns: {{'review_result': bool, 'feedback': str}}
 
-5. **Revise(llm)** - Revise based on feedback
+8. **Revise(llm)** - Revise solution based on feedback
    Call: await self.revise(problem=str, solution=str, feedback=str)
    Returns: {{'solution': str}}
 
-6. **ScEnsemble(llm)** - Ensemble voting
+9. **ScEnsemble(llm)** - Self-consistency ensemble voting
    Call: await self.sc_ensemble(solutions=list, problem=str)
    Returns: {{'response': str}}
 
-7. **Test(llm)** - Generate and run test cases for code
-   Call: await self.test(problem=str, solution=str, entry_point=str)
-   Returns: {{'result': bool, 'solution': str}}
-   **IMPORTANT**: For code problems, entry_point is provided as __call__ parameter!
+10. **MdEnsemble(llm, vote_count=5)** - Majority voting with shuffling
+    Call: await self.md_ensemble(solutions=list, problem=str)
+    Returns: {{'solution': str}}
 
-8. **MdEnsemble(llm)** - Robust majority voting (better than ScEnsemble)
-   Call: await self.md_ensemble(solutions=list, problem=str)
-   Returns: {{'solution': str}}
-   **USE CASE**: When you have multiple solutions and want the most reliable answer.
-   **HOW IT WORKS**: Shuffles solutions and votes multiple times to avoid position bias.
-   **BETTER THAN ScEnsemble** for noisy or uncertain problems.
+## Example Output:
 
-9. **Decompose(llm)** - Break complex problems into sub-problems
-   Call: await self.decompose(problem=str)
-   Returns: {{'subproblems': list, 'reasoning': str, 'count': int}}
-   **USE CASE**: When problem is too complex to solve directly.
-   **WORKFLOW**: decompose -> solve each subproblem -> combine results.
-   **BEST FOR**: Multi-step math, multi-part questions, complex reasoning.
-
-10. **Verify(llm)** - Verify and correct answers
-   Call: await self.verify(problem=str, answer=str)
-   Returns: {{'is_valid': bool, 'issues': list, 'corrected_answer': str}}
-   **USE CASE**: Double-check answers before returning.
-   **WORKFLOW**: generate answer -> verify -> use corrected_answer if invalid.
-   **BEST FOR**: Math problems, factual QA, any problem where correctness matters.
-
-## OUTPUT FORMAT:
-
-```python
-# === PROMPT_CUSTOM START ===
-TASK_PROMPT = \"\"\"Your task-specific prompt here...\"\"\"
-# === PROMPT_CUSTOM END ===
-
+<workflow>
+<graph>
 class Workflow:
-    def __init__(self, name: str, llm_config, dataset: DatasetType):
+    def __init__(self, name: str, llm_config, dataset):
         self.name = name
+        self.dataset = dataset
         self.llm = create_llm_instance(llm_config)
-        # Initialize any operators you need
         self.answer_generate = operator.AnswerGenerate(self.llm)
-        self.programmer = operator.Programmer(self.llm)  # For math calculations
-        # ... add more operators as needed
+        self.review = operator.Review(self.llm)
+        self.revise = operator.Revise(self.llm)
 
-    # For code problems: async def __call__(self, problem: str, entry_point: str = "solve"):
-    # For math/qa problems: async def __call__(self, problem: str):
     async def __call__(self, problem: str, entry_point: str = "solve"):
-        # Your workflow logic - use any operators
-        # For code: use entry_point parameter when calling test()
-        solution = await self.answer_generate(input=problem)
-        return solution['answer'], self.llm.get_usage_summary()["total_cost"]
-```
+        # Generate initial answer
+        result = await self.answer_generate(input=problem)
+        answer = result['answer']
 
-## ⚠️⚠️⚠️ CRITICAL BUG PREVENTION - READ THIS ⚠️⚠️⚠️
-**Programmer returns TWO fields - you MUST use the correct one:**
-- `result['output']` = THE ANSWER (computed result like "42", "3.14", "hello")
-- `result['code']` = THE SOURCE CODE (like "def solve(): return 42") - NEVER USE THIS AS ANSWER!
+        # Review and revise if needed
+        review = await self.review(problem=problem, solution=answer)
+        if not review['review_result']:
+            revised = await self.revise(
+                problem=problem,
+                solution=answer,
+                feedback=review['feedback']
+            )
+            answer = revised['solution']
 
-```python
-# ✅✅✅ CORRECT - This returns the computed answer:
-result = await self.programmer(problem=problem, analysis="Calculate")
-final_answer = result['output']  # e.g., "42" - THIS IS CORRECT!
-return "\\boxed{{" + final_answer + "}}", cost  # Returns \\boxed{{42}}
+        return answer, self.llm.get_usage_summary()["total_cost"]
+</graph>
+<prompt>
+TASK_PROMPT = '''Solve this problem step by step.
+Show your reasoning clearly and provide the final answer.
+'''
+</prompt>
+</workflow>
 
-# ❌❌❌ WRONG - This returns Python source code (BUG!):
-result = await self.programmer(problem=problem, analysis="Calculate")
-final_answer = result['code']  # e.g., "def solve(): return 42" - THIS IS A BUG!
-return "\\boxed{{" + final_answer + "}}", cost  # Returns \boxed{{def solve...}} - WRONG!
-```
-**REMEMBER: output=answer, code=source. ALWAYS use result['output'] for the final answer!**
-
-## DESIGN FREELY:
-- Use 1 operator OR combine multiple operators
-- Create iterative loops (while/for) if needed
-- Chain outputs as inputs to next operators
-- Design conditional logic based on review results
+## Design Guidelines:
+- Combine 1-7 operators creatively
+- Use Review+Revise for quality assurance
+- Use ScEnsemble/MdEnsemble for multiple solutions
+- Use Programmer for computational problems (always use result['output']!)
+- Design TASK_PROMPT to guide the execution LLM
 
 ---
 
-Problem to solve: {problem}
-Problem type: {problem_type}
+Problem: {problem}
+Problem Type: {problem_type}
 
-Generate your PROMPT_CUSTOM and Workflow class:
+Generate your workflow in XML format:
 """
         return prompt
 
@@ -415,88 +383,38 @@ Generate your PROMPT_CUSTOM and Workflow class:
                 }
 
     def _parse_workflow_code(self, generated_text: str, problem_type: str) -> Tuple[str, bool, Optional[str]]:
-        """解析生成的文本，提取并验证工作流代码（支持prompt_custom）"""
+        """解析生成的文本，提取并验证工作流代码（支持XML格式和旧格式）"""
         import re
 
-        # 提取代码块
-        code_start = generated_text.find("```python")
-        if code_start == -1:
-            code_start = generated_text.find("class Workflow:")
-            if code_start == -1:
-                return "", False, "No Workflow class found"
-            code = generated_text[code_start:]
-        else:
-            code_start += len("```python\n")
-            code_end = generated_text.find("```", code_start)
-            code = generated_text[code_start:code_end] if code_end != -1 else generated_text[code_start:]
+        # 🔧 首先尝试提取XML格式
+        graph_code, prompt_code = self._extract_xml_workflow(generated_text)
 
-        code = code.strip()
+        if graph_code:
+            # XML格式解析成功
+            print(f"  📝 检测到XML格式工作流")
+            code = graph_code.strip()
 
-        # 🔧 解析并提取prompt_custom部分
-        # 检查是否包含PROMPT_CUSTOM标记
-        prompt_custom_start = code.find("# === PROMPT_CUSTOM START ===")
-        prompt_custom_end = code.find("# === PROMPT_CUSTOM END ===")
-
-        prompt_custom_code = ""
-        if prompt_custom_start != -1 and prompt_custom_end != -1:
-            # 提取prompt_custom部分（包含结束标记行）
-            end_line_end = code.find("\n", prompt_custom_end)
-            if end_line_end == -1:
-                end_line_end = len(code)
-            prompt_custom_code = code[prompt_custom_start:end_line_end + 1]
-            print(f"  📝 检测到PROMPT_CUSTOM定义")
-        else:
-            # 没有标记，尝试检测TASK_PROMPT等变量定义
-            task_prompt_match = re.search(r'^(TASK_PROMPT\s*=\s*["\'\"\"\"].*?["\'\"\"]\s*$)', code, re.MULTILINE | re.DOTALL)
-            if task_prompt_match:
-                # 提取所有顶级的PROMPT变量定义
-                prompt_patterns = re.findall(
-                    r'^([A-Z_]+_PROMPT\s*=\s*(?:["\'\"\"\"].*?["\'\"\"]|f["\'\"\"\"].*?["\'\"\"])\s*)$',
-                    code,
-                    re.MULTILINE | re.DOTALL
-                )
-                if prompt_patterns:
-                    prompt_custom_code = "\n".join(prompt_patterns)
-                    print(f"  📝 检测到 {len(prompt_patterns)} 个PROMPT变量定义")
-
-        # 如果没有prompt_custom，创建一个默认的
-        if not prompt_custom_code:
-            # 为不同问题类型创建合适的默认prompt
-            if problem_type == "math":
-                prompt_custom_code = '''TASK_PROMPT = """Solve this mathematical problem step by step.
-Show your reasoning clearly and provide the final numerical answer.
-Format: First explain your approach, then show calculations, finally state the answer."""
-'''
-            elif problem_type == "code":
-                prompt_custom_code = '''TASK_PROMPT = """Write a Python function to solve this problem.
-Requirements:
-1. The function should be efficient and handle edge cases
-2. Include proper input validation
-3. Return the correct type as specified"""
-'''
+            # 处理prompt_code
+            if prompt_code:
+                prompt_custom_code = prompt_code.strip()
+                print(f"  📝 从<prompt>标签提取TASK_PROMPT")
             else:
-                prompt_custom_code = '''TASK_PROMPT = """Solve this problem carefully.
-Provide a clear, structured answer with reasoning."""
-'''
-            print(f"  📝 使用默认PROMPT_CUSTOM (问题类型: {problem_type})")
+                prompt_custom_code = self._get_default_prompt_custom(problem_type)
+                print(f"  📝 使用默认PROMPT_CUSTOM (问题类型: {problem_type})")
+        else:
+            # 回退到旧格式解析
+            print(f"  ⚠️ 未检测到XML格式，回退到传统解析")
+            code, prompt_custom_code = self._parse_legacy_format(generated_text, problem_type)
+            if not code:
+                return "", False, "No Workflow class found"
 
         # 确保prompt_custom代码在Workflow类之前
-        # 移除原始位置的prompt_custom，然后添加到开头
-        if prompt_custom_start != -1 and prompt_custom_end != -1:
-            end_line_end = code.find("\n", prompt_custom_end)
-            if end_line_end == -1:
-                end_line_end = len(code)
-            code = code[:prompt_custom_start] + code[end_line_end + 1:]
-
-        # 在import语句之前添加prompt_custom
-        import_match = re.search(r'^import |^from ', code, re.MULTILINE)
-        if import_match:
-            code = prompt_custom_code + "\n" + code
-        else:
-            # 如果没有import，在class之前添加
+        # 检查code是否已包含TASK_PROMPT定义
+        if "TASK_PROMPT" not in code and prompt_custom_code:
+            # 在class之前添加
             class_match = re.search(r'^class Workflow', code, re.MULTILINE)
             if class_match:
-                code = prompt_custom_code + "\n" + code[:class_match.start()] + code[class_match.start():]
+                code = prompt_custom_code + "\n\n" + code
             else:
                 code = prompt_custom_code + "\n" + code
 
@@ -514,6 +432,89 @@ Provide a clear, structured answer with reasoning."""
             code = self._get_default_workflow(problem_type)
 
         return code, is_valid, error
+
+    def _extract_xml_workflow(self, text: str) -> Tuple[str, str]:
+        """从XML格式提取graph和prompt代码
+
+        Returns:
+            (graph_code, prompt_code) - 如果未找到XML格式则返回空字符串
+        """
+        import re
+
+        graph_code = ""
+        prompt_code = ""
+
+        # 尝试提取 <graph>...</graph>
+        graph_match = re.search(r'<graph>\s*([\s\S]*?)\s*</graph>', text)
+        if graph_match:
+            graph_code = graph_match.group(1).strip()
+
+        # 尝试提取 <prompt>...</prompt>
+        prompt_match = re.search(r'<prompt>\s*([\s\S]*?)\s*</prompt>', text)
+        if prompt_match:
+            prompt_code = prompt_match.group(1).strip()
+
+        return graph_code, prompt_code
+
+    def _parse_legacy_format(self, generated_text: str, problem_type: str) -> Tuple[str, str]:
+        """解析旧格式（Python代码块或直接class定义）"""
+        import re
+
+        # 提取代码块
+        code_start = generated_text.find("```python")
+        if code_start == -1:
+            code_start = generated_text.find("class Workflow:")
+            if code_start == -1:
+                return "", ""
+            code = generated_text[code_start:]
+        else:
+            code_start += len("```python\n")
+            code_end = generated_text.find("```", code_start)
+            code = generated_text[code_start:code_end] if code_end != -1 else generated_text[code_start:]
+
+        code = code.strip()
+
+        # 解析并提取prompt_custom部分
+        prompt_custom_start = code.find("# === PROMPT_CUSTOM START ===")
+        prompt_custom_end = code.find("# === PROMPT_CUSTOM END ===")
+
+        prompt_custom_code = ""
+        if prompt_custom_start != -1 and prompt_custom_end != -1:
+            end_line_end = code.find("\n", prompt_custom_end)
+            if end_line_end == -1:
+                end_line_end = len(code)
+            prompt_custom_code = code[prompt_custom_start:end_line_end + 1]
+            # 移除原位置的prompt_custom
+            code = code[:prompt_custom_start] + code[end_line_end + 1:]
+        else:
+            # 尝试检测TASK_PROMPT变量定义
+            task_prompt_match = re.search(
+                r'^(TASK_PROMPT\s*=\s*(?:"""[\s\S]*?"""|\'\'\' [\s\S]*?\'\'\'))',
+                code,
+                re.MULTILINE
+            )
+            if task_prompt_match:
+                prompt_custom_code = task_prompt_match.group(1)
+            else:
+                prompt_custom_code = self._get_default_prompt_custom(problem_type)
+
+        return code.strip(), prompt_custom_code
+
+    def _get_default_prompt_custom(self, problem_type: str) -> str:
+        """获取默认的TASK_PROMPT"""
+        if problem_type == "math":
+            return '''TASK_PROMPT = """Solve this mathematical problem step by step.
+Show your reasoning clearly and provide the final numerical answer.
+Format: First explain your approach, then show calculations, finally state the answer."""'''
+        elif problem_type == "code":
+            return '''TASK_PROMPT = """Write a Python function to solve this problem.
+Requirements:
+1. The function should be efficient and handle edge cases
+2. Include proper input validation
+3. Return the correct type as specified"""'''
+        else:
+            return '''TASK_PROMPT = """Solve this problem carefully.
+Provide a clear, structured answer with reasoning."""'''
 
     def _validate_and_fix_workflow(self, code: str, problem_type: str) -> str:
         """验证并自动修复workflow中缺失的operator初始化
@@ -570,8 +571,12 @@ Provide a clear, structured answer with reasoning."""
                     # review -> Review
                     op_class_name = ''.join(word.capitalize() for word in op_name.split('_'))
 
-                    # 检查是否是有效的operator（从prompt中获取）
-                    valid_operators = ['Custom', 'AnswerGenerate', 'Programmer', 'Test', 'Review', 'Revise', 'ScEnsemble', 'MdEnsemble', 'Decompose', 'Verify']
+                    # 检查是否是有效的operator（AFlow标准10个算子）
+                    valid_operators = [
+                        'Custom', 'AnswerGenerate', 'CustomCodeGenerate',
+                        'Programmer', 'Test', 'Format',
+                        'Review', 'Revise', 'ScEnsemble', 'MdEnsemble'
+                    ]
                     if op_class_name in valid_operators:
                         missing_inits.append(f"{indent}self.{op_name} = operator.{op_class_name}(self.llm)")
 

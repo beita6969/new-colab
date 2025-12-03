@@ -1,0 +1,77 @@
+# -*- coding: utf-8 -*-
+# @Desc: Pydantic models for operator responses
+# Adapted from AFlow's operator_an.py
+
+from pydantic import BaseModel, Field
+
+
+class GenerateOp(BaseModel):
+    """Generic generation response - used by Custom operator"""
+    response: str = Field(default="", description="Your solution for this problem")
+
+
+class CodeGenerateOp(BaseModel):
+    """Code generation response - used by Programmer operator"""
+    code: str = Field(default="", description="Your complete code solution for this problem")
+
+
+class AnswerGenerateOp(BaseModel):
+    """Structured answer with reasoning - used by AnswerGenerate operator"""
+    thought: str = Field(default="", description="The step by step thinking process")
+    answer: str = Field(default="", description="The final answer to the question")
+
+
+class FormatOp(BaseModel):
+    """Formatted answer extraction - used by Format operator"""
+    solution: str = Field(default="", description="Your formatted answer for this problem")
+
+
+class ScEnsembleOp(BaseModel):
+    """Self-consistency ensemble response - used by ScEnsemble operator"""
+    thought: str = Field(default="", description="The thought of the most consistent solution.")
+    solution_letter: str = Field(default="", description="The letter of most consistent solution.")
+
+
+class ReflectionTestOp(BaseModel):
+    """Reflection and correction response - used by Test operator"""
+    reflection_and_solution: str = Field(
+        default="",
+        description="Corrective solution for code execution errors or test case failures"
+    )
+
+
+class MdEnsembleOp(BaseModel):
+    """Majority voting ensemble response - used by MdEnsemble operator"""
+    thought: str = Field(default="", description="Step-by-step analysis of the solutions to determine the best one.")
+    solution_letter: str = Field(default="", description="The letter of the chosen best solution (only one letter).")
+
+
+class ReviewOp(BaseModel):
+    """Solution review response - used by Review operator"""
+    review_result: bool = Field(
+        default=False,
+        description="The Review Result (Bool). If you think this solution looks good for you, return 'true'; If not, return 'false'",
+    )
+    feedback: str = Field(
+        default="",
+        description="Your FeedBack for this problem based on the criteria. If the review result is true, you can put it 'nothing here'.",
+    )
+
+
+class ReviseOp(BaseModel):
+    """Solution revision response - used by Revise operator"""
+    solution: str = Field(default="", description="Based on the feedback, revised solution for this problem")
+
+
+# Export all models
+__all__ = [
+    'GenerateOp',
+    'CodeGenerateOp',
+    'AnswerGenerateOp',
+    'FormatOp',
+    'ScEnsembleOp',
+    'ReflectionTestOp',
+    'MdEnsembleOp',
+    'ReviewOp',
+    'ReviseOp'
+]

@@ -2,14 +2,18 @@
 """
 兼容AFlow的async_llm模块
 提供与AFlow/scripts/async_llm.py相同的接口
+包含Formatter支持的call_with_format()方法
 """
 import os
 import asyncio
 import yaml
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 import httpx
+
+if TYPE_CHECKING:
+    from scripts.formatter import BaseFormatter
 
 
 @dataclass
@@ -153,6 +157,51 @@ class AsyncLLM:
             "total_calls": self.total_calls,
             "total_cost": 0.0  # 简化：不计算成本
         }
+
+    async def call_with_format(
+        self,
+        prompt: str,
+        formatter: "BaseFormatter",
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        使用Formatter调用LLM - AFlow兼容接口
+
+        Args:
+            prompt: 原始提示词
+            formatter: Formatter实例（XmlFormatter/CodeFormatter/TextFormatter）
+            system_prompt: 可选的系统提示词
+            temperature: 可选的温度参数
+            max_tokens: 可选的最大token数
+
+        Returns:
+            解析后的响应字典
+
+        Raises:
+            FormatError: 当响应格式验证失败时
+        """
+        from scripts.formatter import FormatError
+
+        # 使用formatter准备带格式要求的提示词
+        formatted_prompt = formatter.prepare_prompt(prompt)
+
+        # 调用LLM获取响应
+        response = await self(
+            formatted_prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        # 使用formatter验证和解析响应
+        is_valid, parsed = formatter.validate_response(response)
+
+        if not is_valid:
+            raise FormatError(formatter.format_error_message())
+
+        return parsed
 
 
 def create_llm_instance(

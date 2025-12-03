@@ -62,19 +62,14 @@ fix_memory_leak.py
 test_programmer_fix.py
 test_prompt_custom.py
 
-# 冗余数据
+# 冗余数据 (但保留核心训练数据)
 data/ready_to_train/train_10k.jsonl
 data/ready_to_train/train_10k_preprocessed.jsonl
-data/ready_to_train/train.jsonl
-data/ready_to_train/train_clean_llm.jsonl
-data/ready_to_train/train_final_clean.jsonl
-data/ready_to_train/train_llm_cleaned.jsonl
-data/ready_to_train/test.jsonl
-data/ready_to_train/test_500.jsonl
 data/ready_to_train/bad_samples.jsonl
 data/ready_to_train/dropped_samples.jsonl
 data/ready_to_train/data_preprocessing.py
 data/ready_to_train/*.md
+# 保留: train_10k_final.jsonl, test_500_preprocessed.jsonl, test.jsonl
 
 # 冗余配置
 config/*.backup*
