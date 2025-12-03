@@ -1,19 +1,3 @@
-{
-  "total_samples": 13428,
-  "type_distribution": {
-    "code": 3428,
-    "math": 4000,
-    "mixed": 3000,
-    "qa": 3000
-  },
-  "source_distribution": {
-    "humaneval": 1983,
-    "MATH": 2000,
-    "mmlu": 3000,
-    "commonsenseqa": 2166,
-    "mbpp": 1445,
-    "gsm8k": 2000,
-    "hotpotqa": 834
-  },
-  "math_samples_added": 2000
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:b918534e972b90e404c0f4b0a3606961a3c3214e89c15ee435a6d8399aa8a271
+size 333
